@@ -12,7 +12,7 @@ class StarFilter:
     def local_density(self, *args):
 
         # print status message
-        if self.inputs.verbosity > 0: print(f"Filtering pixels, with detection radius: {self.inputs.star_detect_radius} and minimum detection count: {self.inputs.min_star_num}")
+        if self.inputs.verbosity > 0: print(f"Filtering with detection radius: {self.inputs.star_detect_radius} and minimum detection count: {self.inputs.min_star_num}")
 
         # define empty output matrices
         self.state.pixels_in_clusters = []

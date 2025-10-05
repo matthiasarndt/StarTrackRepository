@@ -66,13 +66,9 @@ class CoupledFrames:
         return self
 
     # the same code is used here as in the additional aligning stars to avoid duplication
-    # future releases will optimise this code
     def ref_aligning_stars(self):
 
         self.coords_ref, self.angles_ref = self.calculate_aligning_stars(self.ref_frame, self.ref_frame)
-
-        # self.coords_ref = self.ref_frame.centroid_list
-        # self.angles_ref = self.ref_frame.ref_angles
 
         return self
 

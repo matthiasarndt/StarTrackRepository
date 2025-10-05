@@ -20,10 +20,10 @@ class Starfield:
             print("IN PROGRESS: Determining cluster number")
 
         # it can take incredibly long for this to run if the number of clusters is too high, so capped at 50
-        if len(self.state.pixels_in_clusters) > 50:
+        if len(self.state.pixels_in_clusters) > 100:
             if self.inputs.verbosity > 0:
-                print(f"IN PROGRESS: Trying up to 50 clusters!")
-            cluster_size_list = range(2, 50)
+                print(f"IN PROGRESS: Trying up to 100 clusters!")
+            cluster_size_list = range(2, 100)
         else:
             if self.inputs.verbosity > 0: print(f"Assessing up to {len(self.state.pixels_in_clusters)} clusters!")
             cluster_size_list = range(2, len(self.state.pixels_in_clusters))
@@ -272,20 +272,20 @@ class Starfield:
                 # find the intensity of the cluster
                 cluster_intensity = int(np.sum(masked))
 
-                # find the centroid by weighting against the intensity of each pixel
-                try:
-                    y_indices, x_indices = np.indices(masked.shape)
-                    x_centroid = np.sum(x_indices * masked) / cluster_intensity
-                    y_centroid = np.sum(y_indices * masked) / cluster_intensity
-                    cluster_centroid = [float(x_centroid), float(y_centroid)]
-                except ValueError:
-                    cluster_intensity = np.nan
-                    cluster_centroid = [np.nan, np.nan]
-
-                # on occasion, the code can isolate areas with an intensity of 0 but with a centroid location. the cause of this is currently unknown. this is a workaround.
                 if cluster_intensity == 0:
                     cluster_intensity = np.nan
                     cluster_centroid = [np.nan, np.nan]
+                else:
+                    # find the centroid by weighting against the intensity of each pixel.
+                    # in the case that the centroid cannot be calculated (value error, zero division error) label as NaN
+                    try:
+                        y_indices, x_indices = np.indices(masked.shape)
+                        x_centroid = np.sum(x_indices * masked) / cluster_intensity
+                        y_centroid = np.sum(y_indices * masked) / cluster_intensity
+                        cluster_centroid = [float(x_centroid), float(y_centroid)]
+                    except (ValueError, ZeroDivisionError):
+                        cluster_intensity = np.nan
+                        cluster_centroid = [np.nan, np.nan]
 
             # if over three stars are identified, assume it's a false detection and ignore
             else:

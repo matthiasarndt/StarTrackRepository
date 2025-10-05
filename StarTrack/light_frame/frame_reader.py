@@ -30,8 +30,8 @@ class FrameReader:
         blur_frame = threshold_frame.filter(ImageFilter.GaussianBlur(radius=self.inputs.blur_radius))
         blur_array = np.array(blur_frame)
 
-        # re-threshold the blurred image
-        self.state.threshold_array = (blur_array > 100) * 255  # pixels above threshold become 255, others 0
+        # re-threshold the blurred image. make sure this is 8 bit to reduce memory load!
+        self.state.threshold_array = (blur_array > 100).astype(np.uint8) * 255
 
         # calculate the pixels to be cropped
         masked_array = np.zeros_like(self.state.threshold_array)

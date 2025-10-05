@@ -44,11 +44,90 @@ class LightFrame:
         self.i_ref_star = None
         self.non_ref_stars = None
 
+    # tune to provide a good thresholding value
+    def tune_threshold(self):
+
+        # implementation of a line solver, reducing threshold from 254 at increments of 4
+        # stop when an acceptable spread of stars is found between min_star_radius 1000 (?) & 1
+        # return just this value
+        # find a way to integrate this result into the rest of the code
+
+        # threshold will be set to -1 by default, which will run this code.
+        # this code should only be run if self.inputs.threshold = -1, if not, it can be ignored
+        # later check if self.inputs.threshold is -1
+        # if it is, use the value found here.
+        # if not, use the value predefined
+
+        def fitness_function(x):
+
+            def evaluate_threshold(min_star_num,count,case):
+
+                # try a new input, with an updated min_star_num
+                self.inputs = replace(self.inputs, min_star_num=min_star_num, threshold_value=x)
+
+                # run processing and find residual
+                print(f"ATTEMPTING THRESHOLD: {threshold_iteration}")
+                FrameReader(self).pre_process()
+                StarFilter(self).local_density()
+
+                # assume high residual
+                z = 1000
+
+                # only run this if pixels are detected
+                if len(self.pixels_in_clusters) > 0:
+                    # count stars
+                    Starfield(self).count_stars()
+
+                    # assess results
+                    if case == "upper_bound":
+                        if self.n_clusters > count:
+                            z = 0
+                        else:
+                            z = abs(self.n_clusters - count)
+                        #print(f"upper bound residual: {z}")
+
+                    if case == "lower_bound":
+                        if self.n_clusters < count:
+                            z = 0
+                        else:
+                            z = abs(self.n_clusters - count)
+                        #print(f"lower bound residual: {z}")
+
+                return z
+
+            # evaluate star detections & resulting residuals at extreme limits
+            min_radius_residual = evaluate_threshold(min_star_num=10,count=50,case="upper_bound")
+            max_radius_residual = evaluate_threshold(min_star_num=1000,count=5,case="lower_bound")
+
+            total_residual = min_radius_residual + max_radius_residual
+
+            return total_residual
+
+        # initialise
+        iterate = True
+        threshold_iteration = 254
+        threshold_reduction = 4
+        residual = fitness_function(threshold_iteration)
+        print(residual)
+        if residual == 0: iterate = False
+
+        # continue to calculate values until the residual drops to 0
+        while iterate:
+
+            # increase the value of the star detection radius:
+            threshold_reduction = threshold_reduction * 1.05
+            threshold_iteration = threshold_iteration - threshold_reduction
+
+            residual = fitness_function(threshold_iteration)
+            print(residual)
+
+            if residual == 0:
+                iterate = False
+
+        return threshold_iteration
+
     # find the minium search radius required to find n clusters
     def solve_for_n_clusters(self, n_desired_clusters):
-
-        # print update message
-        print(f"Assessing image star density to solve for detection threshold required to find {n_desired_clusters} largest stars")
 
         # fitness function which is passed through the least squares optimiser
         def fitness_function(x):
@@ -102,5 +181,7 @@ if __name__ == "__main__":
     data_dir = Path(r"D:\_Local\OneDrive\Astronomy\StarTrack\dev\raw_data_horsehead")
     t_val = 254
     verbosity = 1
-    light = LightFrame(frame_directory=data_dir, frame_name="20210212210734 [ISO400] [60.2s] [f4.7] [288mm].NEF", verbosity=verbosity, min_star_num=20, threshold_value=t_val)
-    light.process()
+    light = LightFrame(frame_directory=data_dir, frame_name="20210212210734 [ISO400] [60.2s] [f4.7] [288mm].NEF", verbosity=verbosity, min_star_num=20, threshold_value=225)
+    light.process_with_solver(5)
+    # threshold_tuned = light.tune_threshold()
+    # print(f"Threshold tuned: {threshold_tuned}")
