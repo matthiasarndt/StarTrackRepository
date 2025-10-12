@@ -18,7 +18,10 @@ class CoupledFrames:
         self.angles_ref = None
         self.coords_addition = None
         self.angles_addition = None
-        self.addition_frame_aligned = None
+        self.addition_aligned_array_mono = None
+        self.addition_aligned_array_r = None
+        self.addition_aligned_array_g = None
+        self.addition_aligned_array_b = None
 
     # determine the aligning stars for the addition frame
     def addition_aligning_stars(self):
@@ -74,6 +77,23 @@ class CoupledFrames:
 
     def align_addition_frame(self):
 
+        # function wrapping warping code
+        def warp_array(array):
+            warped_array = warp(array, inverse_map=transform.inverse,output_shape=array.shape, preserve_range=True)
+            return warped_array
+
+        # estimate transform matrices for "affine" image distortion assumption, using the coordinates calculated
+        transform = estimate_transform('affine', self.coords_addition, self.coords_ref)
+
+        # apply warp with inverse transform
+        # aligned_mono = warp_array(array=self.addition_frame.mono_array)
+        aligned_r = warp_array(array=self.addition_frame.r_array)
+        aligned_g = warp_array(array=self.addition_frame.g_array)
+        aligned_b = warp_array(array=self.addition_frame.b_array)
+
+        aligned_mono = warp(self.addition_frame.mono_array, inverse_map=transform.inverse,output_shape=self.addition_frame.mono_array.shape, preserve_range=True)
+
+        # print update
         if __name__ == '__main__':
             print("Reference Alignment Co-ordinates: ")
             print(self.coords_ref)
@@ -84,15 +104,14 @@ class CoupledFrames:
             print("Addition Alignment Angles: ")
             print(self.angles_addition)
 
-        # estimate transform matrices for "affine" image distortion assumption, using the coordinates calculated
-        tform = estimate_transform('affine', self.coords_addition, self.coords_ref)
-
-        # apply warp with inverse transform
-        aligned = warp(self.addition_frame.mono_array, inverse_map=tform.inverse,
-                       output_shape=self.addition_frame.mono_array.shape, preserve_range=True)
-
         # convert to 8 bit
-        self.addition_frame_aligned = np.clip(aligned, 0, 255).astype(np.uint8)
+        self.addition_aligned_array_mono = np.clip(aligned_mono, 0, 255).astype(np.uint8)
+        self.addition_aligned_array_r = np.clip(aligned_r, 0, 255).astype(np.uint8)
+        self.addition_aligned_array_g = np.clip(aligned_g, 0, 255).astype(np.uint8)
+        self.addition_aligned_array_b = np.clip(aligned_b, 0, 255).astype(np.uint8)
+
+        # delete to remove memory
+        # del self.addition_frame.r_array, self.addition_frame.g_array, self.addition_frame.b_array
 
         return self
 
@@ -185,17 +204,20 @@ if __name__ == '__main__':
     t_val = 254
 
     # create reference frame objects
-    frame_ref = LightFrame(frame_directory=data_dir, frame_name="L_0786_ISO800_90s__NA.NEF", verbosity=verbosity, min_star_num=157.09375, threshold_value=t_val)
-    frame_add = LightFrame(frame_directory=data_dir, frame_name="L_0787_ISO800_90s__NA.NEF", verbosity=verbosity, min_star_num=50, threshold_value=t_val)
+    frame_ref = LightFrame(frame_directory=data_dir, frame_name="L_0786_ISO800_90s__NA.NEF", verbosity=verbosity, star_detect_pixels=157.09375, threshold=t_val)
+    frame_add = LightFrame(frame_directory=data_dir, frame_name="L_0787_ISO800_90s__NA.NEF", verbosity=verbosity, star_detect_pixels=50, threshold=t_val)
 
-    with ProcessPoolExecutor() as executor:
-        frame_ref, frame_add = executor.map(process_frame, [frame_ref, frame_add])
+    frame_ref.process_tuning_star_detect(n_desired_clusters=5)
+    frame_add.process_tuning_star_detect(n_desired_clusters=20)
+
+    #with ProcessPoolExecutor() as executor:
+    #    frame_ref, frame_add = executor.map(process_frame, [frame_ref, frame_add])
 
     # couple frames and find aligning stars for reference frame
     coupled_frames = CoupledFrames(frame_ref, frame_add)
     coupled_frames.align()
 
     # show alignment of additional frame to reference frame
-    plt.imshow(coupled_frames.addition_frame_aligned, cmap='gray')
+    plt.imshow(coupled_frames.addition_aligned_array_mono, cmap='gray')
     plt.show()
 

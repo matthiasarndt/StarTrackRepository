@@ -13,17 +13,20 @@ class FrameReader:
 
     def processing(self, *args):
 
-        # convert to grayscale
+        # extract all data, mono, red, green, blue
         self.state.mono_frame = self.state.rgb_frame.convert('L')
-
-        # log update to output
-        if self.inputs.verbosity > 0: print(f"Loading {self.inputs.frame_directory}\\{self.inputs.frame_name}")
+        r_frame = self.state.rgb_frame.getchannel('R')
+        g_frame = self.state.rgb_frame.getchannel('G')
+        b_frame = self.state.rgb_frame.getchannel('B')
 
         # convert to numpy array for processing
         self.state.mono_array = np.array(self.state.mono_frame)
+        self.state.r_array = np.array(r_frame)
+        self.state.g_array = np.array(g_frame)
+        self.state.b_array = np.array(b_frame)
 
         # threshold the image
-        self.state.threshold_array = (self.state.mono_array > self.inputs.threshold_value) * 255  # pixels above threshold become 255, others 0
+        self.state.threshold_array = (self.state.mono_array > self.inputs.threshold) * 255  # pixels above threshold become 255, others 0
         threshold_frame = Image.fromarray(self.state.threshold_array.astype(np.uint8))
 
         # blur the image
@@ -54,9 +57,14 @@ class FrameReader:
             blur_frame.show()
             self.state.mono_frame.show()
 
+        # delete data from memory that is no longer needed!
+
         return self
 
     def pre_process(self, *args):
+
+        # print update
+        if self.inputs.verbosity > 0: print(f"Loading {self.inputs.frame_directory}\\{self.inputs.frame_name}")
 
         # find image
         read_path = Path(self.inputs.frame_directory)/self.inputs.frame_name
@@ -66,11 +74,10 @@ class FrameReader:
             with rawpy.imread(str(read_path)) as raw:
                 rgb_array_raw = raw.postprocess(use_camera_wb=True, output_bps=8)
             self.state.rgb_frame = Image.fromarray(rgb_array_raw)
-
         elif read_path.suffix.lower() in [".jpg",".jpeg",".png"]:
             self.state.rgb_frame = Image.open(read_path)
-
         else :
+            # raise erroer
             raise TypeError("Unsupported file type")
 
         # once data is read, pre-process

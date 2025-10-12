@@ -10,17 +10,20 @@ from pathlib import Path
 from dataclasses import replace
 
 class LightFrame:
+
     # define inputs as a data class which is frozen
     @dataclass(frozen=True)
     class FrameInputs:
+
         # default inputs, where possible, are written below
         frame_name: str
         frame_directory: Path
+        threshold: int = 254
+
         # inputs are ordered so that those without a default value go first
         verbosity: int = 0
         star_detect_radius: int = 20
-        min_star_num: int = 50
-        threshold_value: int = 250
+        star_detect_pixels: int = 50
         crop_factor: float = 0.85
         blur_radius: float = 3
 
@@ -60,10 +63,10 @@ class LightFrame:
 
         def fitness_function(x):
 
-            def evaluate_threshold(min_star_num,count,case):
+            def evaluate_threshold(star_detect_pixels,count,case):
 
-                # try a new input, with an updated min_star_num
-                self.inputs = replace(self.inputs, min_star_num=min_star_num, threshold_value=x)
+                # try a new input, with an updated star_detect_pixels
+                self.inputs = replace(self.inputs, star_detect_pixels=star_detect_pixels, threshold=x)
 
                 # run processing and find residual
                 print(f"ATTEMPTING THRESHOLD: {threshold_iteration}")
@@ -96,8 +99,8 @@ class LightFrame:
                 return z
 
             # evaluate star detections & resulting residuals at extreme limits
-            min_radius_residual = evaluate_threshold(min_star_num=10,count=50,case="upper_bound")
-            max_radius_residual = evaluate_threshold(min_star_num=1000,count=5,case="lower_bound")
+            min_radius_residual = evaluate_threshold(star_detect_pixels=10,count=50,case="upper_bound")
+            max_radius_residual = evaluate_threshold(star_detect_pixels=1000,count=5,case="lower_bound")
 
             total_residual = min_radius_residual + max_radius_residual
 
@@ -124,16 +127,16 @@ class LightFrame:
             if residual == 0:
                 iterate = False
 
-        return threshold_iteration
+        return int(threshold_iteration)
 
     # find the minium search radius required to find n clusters
-    def solve_for_n_clusters(self, n_desired_clusters):
+    def tune_star_detect_pixels(self, n_desired_clusters):
 
         # fitness function which is passed through the least squares optimiser
         def fitness_function(x):
 
-            # try a new input, with an updated min_star_num
-            self.inputs = replace(self.inputs, min_star_num=x)
+            # try a new input, with an updated star_detect_pixels
+            self.inputs = replace(self.inputs, star_detect_pixels=x)
 
             # run processing and find residual
             StarFilter(self).local_density()
@@ -146,7 +149,7 @@ class LightFrame:
 
             # debugging information
             if __name__ == "__main__":
-                print(f"Residual = {residual}, from min_star_num = {x}")
+                print(f"Residual = {residual}, from star_detect_pixels = {x}")
 
             return residual
 
@@ -159,29 +162,29 @@ class LightFrame:
         # return an optimum minimum star count
         return result
 
-    # runs through the processing pipeline for a standard frame
+    # process light frame
     def process(self):
         FrameReader(self).pre_process()
         StarFilter(self).local_density()
         Starfield(self).count_stars()
-        Starfield(self).register_star_properties()
+        Starfield(self).catalogue_detected_stars()
         StarAlignmentVectors(self).from_biggest_star()
 
         return self
 
-    # run numerical solving methods to determine the optimal min_star_number for image filtering
-    def process_with_solver(self, n_desired_clusters):
-        optimal_min_star_radius = self.solve_for_n_clusters(n_desired_clusters) # calls FilterImage and CatalogueClusters to do this
-        Starfield(self).register_star_properties()
+    # process light frame and tune star_detect_pixels to the correct value
+    def process_tuning_star_detect(self, n_desired_clusters):
+        tuned_star_detect_pixels = self.tune_star_detect_pixels(n_desired_clusters) # calls FilterImage and CatalogueClusters to do this
+        Starfield(self).catalogue_detected_stars()
         StarAlignmentVectors(self).from_biggest_star()
 
-        return optimal_min_star_radius
+        return tuned_star_detect_pixels
 
 if __name__ == "__main__":
-    data_dir = Path(r"D:\_Local\OneDrive\Astronomy\StarTrack\dev\raw_data_horsehead")
-    t_val = 254
+    data_dir = Path(r"D:\_Local\OneDrive\Astronomy\StarTrack\dev\raw_data_iris_nebula")
     verbosity = 1
-    light = LightFrame(frame_directory=data_dir, frame_name="20210212210734 [ISO400] [60.2s] [f4.7] [288mm].NEF", verbosity=verbosity, min_star_num=20, threshold_value=225)
-    light.process_with_solver(5)
-    # threshold_tuned = light.tune_threshold()
-    # print(f"Threshold tuned: {threshold_tuned}")
+    #light = LightFrame(frame_directory=data_dir, frame_name="iris_nebula_frame_2.jpg", verbosity=verbosity)
+    #t_tuned = light.tune_threshold()
+    light = LightFrame(frame_directory=data_dir, frame_name="iris_nebula_frame_2.jpg", verbosity=verbosity, star_detect_pixels=500.5, threshold=231)
+    light.process()
+    temp = 5

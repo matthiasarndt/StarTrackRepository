@@ -1,6 +1,7 @@
 
 # dependencies
 import numpy as np
+from StarTrack.light_frame.utils.main import Utils
 from PIL import Image
 
 class StarFilter:
@@ -12,7 +13,7 @@ class StarFilter:
     def local_density(self, *args):
 
         # print status message
-        if self.inputs.verbosity > 0: print(f"Filtering with detection radius: {self.inputs.star_detect_radius} and minimum detection count: {self.inputs.min_star_num}")
+        if self.inputs.verbosity > 0: print(f"Filtering with detection radius: {self.inputs.star_detect_radius} and minimum detection count: {self.inputs.star_detect_pixels}")
 
         # define empty output matrices
         self.state.pixels_in_clusters = []
@@ -41,7 +42,7 @@ class StarFilter:
             adjacent_star_pixels = np.vstack((star_pixels_y[mask_yx], star_pixels_x[mask_yx]))
 
             # we add 1 because filtered_stars will always have a minimum length of 1 (as the reference star will be in it)
-            if adjacent_star_pixels.shape[1] > (self.inputs.min_star_num + 1):
+            if adjacent_star_pixels.shape[1] > (self.inputs.star_detect_pixels + 1):
 
                 # save the pixel co-ordinates to pixels in co-ordinates list
                 self.state.pixels_in_clusters.append([ref_x, ref_y])
