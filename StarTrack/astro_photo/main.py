@@ -4,12 +4,15 @@ import os
 import gc
 import traceback
 import numpy as np
+import json
+import math
+import tifffile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from collections import namedtuple
 from pathlib import Path
+from matplotlib import pyplot as plt
 from StarTrack import LightFrame, CoupledFrames
-from PIL import Image
 
 ### useful functions for directory manipulation ###
 def delete_previous_output(directory,output_list):
@@ -81,10 +84,10 @@ AdditionalFrames = namedtuple("AdditionalFrames",["i_layer", "image_name", "data
 class AstroPhoto:
 
     # define inputs as a data class which is frozen
-    @dataclass(frozen=True)
-    class AstroPhotoData:
-
+    @dataclass(frozen=False)
+    class Inputs:
         data_directory: Path
+        stack_directory: Path = Path('C:\StarTrack')
         ref_frame_name: str = None
         verbosity: int = 0
         n_aligning_stars: int = 5
@@ -94,105 +97,149 @@ class AstroPhoto:
 
     def __init__(self, **kwargs):
 
-        # import inputs from dataclass
-        self.image_list = None
+        # input information
+        self.inputs = self.Inputs(**kwargs)
+        self.frame_list = None
         self.ref_star_detect_pixels = None
         self.add_star_detect_pixels = None
+        self.aligned_stack_read = None
+        self.stacked_array = None
         self.stacked_frame_mono = None
         self.stacked_frame_rgb = None
-        self.stacked_array_mono = None
-        self.stacked_array_r = None
-        self.stacked_array_g = None
-        self.stacked_array_b = None
-        self.stack_mono_arrays = None
-        self.stack_r_arrays = None
-        self.stack_g_arrays = None
-        self.stack_b_arrays = None
-        self.inputs = self.AstroPhotoData(**kwargs)
+
+        # determine output directory
         self.output_directory = Path(self.inputs.data_directory) / "outputs"
 
-    def initialise(self):
-
-        # list all images in directory, make outputs folder, and delete previous outputs
-        self.output_directory.mkdir(parents=True, exist_ok=True)
-        delete_previous_output(self.output_directory, output_list=["reference_frame_mono.jpg","reference_frame_rgb.jpg","stacked_frames_mono.jpg","stacked_frames_rgb.jpg"])
-        self.image_list = list_data_in_directory(self.inputs.data_directory)
-
-        print(f"Index image data in {self.inputs.data_directory}")
+        # determine the reference image and therefore the dimensions of the reference image
+        self.frame_list = list_data_in_directory(self.inputs.data_directory)
+        print(f"Indexing image data directory: {self.inputs.data_directory}")
 
         # determine index of reference frame:
         if self.inputs.ref_frame_name is None:
-            i_ref_frame = 0
+            self.i_ref_frame = 0
         else:
-            i_ref_frame = self.image_list.index(self.inputs.ref_frame_name)
+            self.i_ref_frame = self.frame_list.index(self.inputs.ref_frame_name)
 
-        print(f"Initialising with reference frame {self.inputs.ref_frame_name}")
+        # load reference frame, find data dimensions, delete reference frame from memory. NOTE: this is a temporary solution, will be refactored for efficiency
+        light_temp = LightFrame(frame_directory=self.inputs.data_directory, frame_name=self.frame_list[self.i_ref_frame], verbosity=0)
+        self.frame_shape = light_temp.get_frame_shape()
+        del light_temp
 
-        # tune threshold with light_tuning instance of LightFrame. delete once generated, to reduce memory usage
-        if self.inputs.threshold == -1:
+    def align(self):
+
+        def tune_parameters():
+
+            delete_previous_output(directory=self.output_directory,output_list=["tuned_parameters.json"])
+
+            # tune threshold with light_tuning instance of LightFrame. delete once generated, to reduce memory usage
+            if self.inputs.threshold == -1:
+                print(f"Threshold set to -1 -tuning threshold parameter...")
+                tuned_threshold = LightFrame(frame_directory=self.inputs.data_directory,
+                                          frame_name=self.frame_list[self.i_ref_frame],
+                                          verbosity=0).tune_threshold()
+                print(f"... process complete")
+                self.inputs = replace(self.inputs, threshold=tuned_threshold)
+
+            # create reference light frame instance
+            print(f"Tuning star detect pixels parameters...")
             light_tuning = LightFrame(frame_directory=self.inputs.data_directory,
-                                      frame_name=self.image_list[i_ref_frame],
-                                      verbosity=0)
-            tuned_threshold = light_tuning.tune_threshold()
-            self.inputs = replace(self.inputs,threshold=tuned_threshold,verbosity=self.inputs.verbosity)
-            del light_tuning
-            print(f"Threshold set to -1, tuning threshold parameter")
+                                      frame_name=self.frame_list[self.i_ref_frame],
+                                      verbosity=self.inputs.verbosity,
+                                      threshold=self.inputs.threshold)
 
-        # create reference light frame instance
-        light_tuning = LightFrame(frame_directory=self.inputs.data_directory,
-                               frame_name=self.image_list[i_ref_frame],
-                               verbosity=self.inputs.verbosity,
-                               threshold=self.inputs.threshold)
+            # tune star_detect_parameter:
+            add_tuning_multiplier = 6
+            ref_frame_args = SolverInitialisationFrames(light_tuning,self.inputs.n_aligning_stars)
+            add_frame_args = SolverInitialisationFrames(light_tuning,self.inputs.n_aligning_stars * add_tuning_multiplier)
+            with ProcessPoolExecutor(max_workers=2) as tuning_executor:
+                light_ref_tuned, light_ref_tuned_for_additional = tuning_executor.map(worker_process_with_tuning,[ref_frame_args, add_frame_args])
 
-        # tune star_detect_parameter:
-        add_tuning_multiplier = 6
-        ref_frame_args = SolverInitialisationFrames(light_tuning,self.inputs.n_aligning_stars)
-        add_frame_args = SolverInitialisationFrames(light_tuning,self.inputs.n_aligning_stars*add_tuning_multiplier)
-        with ProcessPoolExecutor(max_workers=2) as executor:
-            light_tuned_ref, light_tuned_add = executor.map(worker_process_with_tuning, [ref_frame_args, add_frame_args])
+            # store tuned parameters
+            self.ref_star_detect_pixels = light_ref_tuned.inputs.star_detect_pixels
+            self.add_star_detect_pixels = light_ref_tuned_for_additional.inputs.star_detect_pixels
 
-        self.ref_star_detect_pixels = light_tuned_ref.inputs.star_detect_pixels
-        self.add_star_detect_pixels = light_tuned_add.inputs.star_detect_pixels
+            # create json file to store tuning parameters
+            tuned_parameters = {"reference_frame": self.frame_list[self.i_ref_frame],
+                                "threshold": self.inputs.threshold,
+                                "ref_star_detect_pixels": self.ref_star_detect_pixels,
+                                "add_star_detect_pixels": self.add_star_detect_pixels}
+            with open(self.output_directory / "tuned_parameters.json", "w") as json_file: json.dump(tuned_parameters,json_file, indent=4)
 
-        # create output matrices
-        self.stack_mono_arrays = np.full((len(self.image_list), light_tuned_ref.mono_array.shape[0], light_tuned_ref.mono_array.shape[1]), 0, dtype=np.uint8)
-        self.stack_r_arrays = np.full((len(self.image_list), light_tuned_ref.mono_array.shape[0], light_tuned_ref.mono_array.shape[1]), 0, dtype=np.uint8)
-        self.stack_g_arrays = np.full((len(self.image_list), light_tuned_ref.mono_array.shape[0], light_tuned_ref.mono_array.shape[1]), 0, dtype=np.uint8)
-        self.stack_b_arrays = np.full((len(self.image_list), light_tuned_ref.mono_array.shape[0], light_tuned_ref.mono_array.shape[1]), 0, dtype=np.uint8)
+            # save solving paramters, reference frame image, & print to terminal
+            light_ref_tuned.mono_frame.save(Path(self.output_directory) / "reference_frame_mono.jpg")
+            light_ref_tuned.rgb_frame.save(Path(self.output_directory) / "reference_frame_rgb.jpg")
+            print(f"... star detection pixels tuned to {round(self.ref_star_detect_pixels,2)} for reference frame")
+            print(f"... star detection pixels tuned to {round(self.add_star_detect_pixels,2)} for additional frames")
 
-        # remove the reference image from the image_list
-        self.image_list.pop(i_ref_frame)
+            return light_ref_tuned
 
-        # 8: save solving paramters, reference frame image, & print to terminal
-        light_tuned_ref.mono_frame.save(Path(self.output_directory) / "reference_frame_mono.jpg")
-        light_tuned_ref.rgb_frame.save(Path(self.output_directory) / "reference_frame_rgb.jpg")
+        def use_pre_tuned_parameters():
 
-        print(f"Star detection pixels tuned to {self.ref_star_detect_pixels} for reference frame")
-        print(f"Star detection pixels tuned to {self.add_star_detect_pixels} for additional frames")
+            # find json file and raise error if not found
+            json_path = Path(self.output_directory) / "tuned_parameters.json"
+            if not json_path.is_file():
+                raise FileNotFoundError(f"Tuned parameters not found at: {json_path}")
+            with open(json_path, "r") as f:
+                data = json.load(f)
+
+            # assign parameters from JSON to self
+            self.frame_list[self.i_ref_frame] = data["reference_frame"]
+            self.inputs.threshold = data["threshold"]
+            self.ref_star_detect_pixels = data["ref_star_detect_pixels"]
+            self.add_star_detect_pixels = data["add_star_detect_pixels"]
+
+            # create light_ref with pre tuned variables and process
+            light_ref_pre_tuned = LightFrame(frame_directory=self.inputs.data_directory,
+                                                frame_name=self.frame_list[self.i_ref_frame],
+                                                verbosity=self.inputs.verbosity,
+                                                threshold=self.inputs.threshold,
+                                                star_detect_pixels=self.ref_star_detect_pixels).process()
+
+            return light_ref_pre_tuned
+
+        # make outputs folder, and delete previous outputs results
+        self.output_directory.mkdir(parents=True, exist_ok=True)
+        delete_previous_output(directory=self.output_directory, output_list=["reference_frame_mono.jpg","reference_frame_rgb.jpg","stacked_frames_mono.jpg","stacked_frames_rgb.jpg"])
+
+        # create memory mapped arrays
+        aligned_stack_write = np.memmap(filename=self.inputs.stack_directory / "stack_aligned_array.dat",
+                                             dtype=np.uint8,
+                                             mode='w+',
+                                             shape=(len(self.frame_list), 4, self.frame_shape[0], self.frame_shape[1]))
+
+        # by default, tuning is set to 1:
+        flag_tuning = 1
+
+        # check if tuned parameters already exist - check if the user doesn't want to tune, and set to 0 if true
+        if (Path(self.output_directory) / "tuned_parameters.json").is_file():
+            while True:
+                response = input("Previously tuned parameters found for this dataset! Continue? (Y), or retune (N)?: ").strip().lower()
+                if response in ("y", "n"):
+                    if response == "y":
+                        flag_tuning = 0
+                        break
+                    break
+                print("Please enter 'Y' or 'N'.")
+
+        # if the tuning flag is positive, tune, if it isn't, process with declared value
+        if flag_tuning == 1:
+            light_ref = tune_parameters()
+        else:
+            light_ref = use_pre_tuned_parameters()
+
+        # store light_ref mono & r/g/b data
+        aligned_stack_write[0, :, :, :] = np.stack([light_ref.mono_array, light_ref.r_array, light_ref.g_array, light_ref.b_array])
+        aligned_stack_write.flush()
 
         # clean-up memory as the initialisation process is complete
         gc.collect()
 
-        test = 5
-
-        return self
-
-    def align_frames(self):
-
-        # create reference light frame instance
-        light_ref = LightFrame(frame_directory=self.inputs.data_directory,frame_name=self.inputs.ref_frame_name,verbosity=self.inputs.verbosity,
-                                  threshold=self.inputs.threshold,star_detect_pixels=self.ref_star_detect_pixels)
-        light_ref.process()
-
-        # store light_ref mono & r/g/b data
-        self.stack_mono_arrays[0, :, :] = light_ref.mono_array
-        self.stack_r_arrays[0, :, :] = light_ref.r_array
-        self.stack_g_arrays[0, :, :] = light_ref.g_array
-        self.stack_b_arrays[0, :, :] = light_ref.b_array
+        # remove the reference image from the image_list
+        align_frame_list = self.frame_list[:self.i_ref_frame] + self.frame_list[self.i_ref_frame + 1:]
 
         # define inputs for the remainder of frames to be processed, with a named tuple as input structure and list comprehension
-        args_tuple = [AdditionalFrames(i_layer, self.image_list[i_layer], self.inputs.data_directory, self.add_star_detect_pixels, light_ref, self.inputs.threshold)
-            for i_layer in range(0, len(self.image_list))]
+        args_tuple = [AdditionalFrames(i_layer, align_frame_list[i_layer], self.inputs.data_directory, self.add_star_detect_pixels, light_ref, self.inputs.threshold)
+                      for i_layer in range(0, len(align_frame_list))]
 
         # execute the processing of all remaining frames in parallel
         with ProcessPoolExecutor(max_workers=self.inputs.max_cores) as executor:
@@ -204,45 +251,102 @@ class AstroPhoto:
                 result = future.result()
                 if "error" in result:
                     print(f"Failed to align {result['image_name']}")
-                    continue  # skip this fram
+                    continue  # skip this frame
 
                 # store aligned r/g/b data
-                self.stack_mono_arrays[result["i_layer"] + 1, :, :] = result["mono"]
-                self.stack_r_arrays[result["i_layer"] + 1, :, :] = result["r"]
-                self.stack_g_arrays[result["i_layer"] + 1, :, :] = result["g"]
-                self.stack_b_arrays[result["i_layer"] + 1, :, :] = result["b"]
+                aligned_stack_write[result["i_layer"] + 1, :, :, :] = np.stack([result["mono"], result["r"], result["g"], result["b"]])
+                aligned_stack_write.flush()
 
-        # remove any layers that have only 0s in them (indicating an unsuccessful frame alignment)
-        self.stack_mono_arrays = self.stack_mono_arrays[~np.all(self.stack_mono_arrays==0,axis=(1,2))]
-        self.stack_r_arrays = self.stack_r_arrays[~np.all(self.stack_r_arrays==0,axis=(1,2))]
-        self.stack_g_arrays = self.stack_g_arrays[~np.all(self.stack_g_arrays==0,axis=(1,2))]
-        self.stack_b_arrays = self.stack_b_arrays[~np.all(self.stack_b_arrays==0,axis=(1,2))]
+        # force memory collection
+        del aligned_stack_write
         gc.collect()
 
-    def stack_aligned_frames(self):
+    def stack(self):
+
+        # print update
+        print("Stacking data ...")
 
         # delete previous stacked image
-        delete_previous_output(self.output_directory,output_list=['stacked_frame.jpg'])
+        delete_previous_output(self.output_directory,output_list=["stacked_frame_mono.tiff","stacked_frame_rgb.tiff"])
 
-        # choose averaging method depending on inputs - currently only one implemented
-        if self.inputs.stacking_method == 'mean':
-            self.stacked_array_mono = np.mean(self.stack_mono_arrays,axis=0)
-            self.stacked_array_r = np.mean(self.stack_r_arrays,axis=0)
-            self.stacked_array_g = np.mean(self.stack_g_arrays,axis=0)
-            self.stacked_array_b = np.mean(self.stack_b_arrays,axis=0)
+        # create memory mapped array to read data. a new variable is created to ensure this data is read only!
+        aligned_stack_read = np.memmap(filename=self.inputs.stack_directory / "stack_aligned_array.dat",
+                                        dtype=np.uint8,
+                                        mode='r',
+                                        shape=(len(self.frame_list), 4, self.frame_shape[0], self.frame_shape[1]))
 
-        # convert the image to an array, making sure to make it 8 bit
-        stacked_frame_mono = Image.fromarray(self.stacked_array_mono.astype(np.uint8))
-        stacked_frame_r = Image.fromarray(self.stacked_array_r.astype(np.uint8))
-        stacked_frame_g = Image.fromarray(self.stacked_array_g.astype(np.uint8))
-        stacked_frame_b = Image.fromarray(self.stacked_array_b.astype(np.uint8))
+        # pre define stacked array - 16 bit!
+        stacked_array = np.empty((4, self.frame_shape[0], self.frame_shape[1]),dtype=np.uint16)
 
-        # save mono image
-        stacked_frame_mono.save(Path(self.output_directory) / "stacked_frame_mono.jpg")
+        # set up interactive stacked image plot - allowing results to be shown "live"
+        plt.ion()
+        fig, ax = plt.subplots()
+        fig.set_size_inches(12, 8)
+        image = ax.imshow(stacked_array[0],cmap='gray',vmin=0,vmax=65535)
+        plt.show()
 
-        # save rgb image
-        stacked_frame_rgb = Image.merge('RGB', (stacked_frame_r,stacked_frame_g,stacked_frame_b))
-        stacked_frame_rgb.show()
-        stacked_frame_rgb.save(Path(self.output_directory) / "stacked_frame_rgb.jpg")
+        # calculate the number of chunks required. the maximum chunk size is set manually as 1GB!
+        # converting to 32-bit float will 4x required memory - this is required to convert the data from 8bit (max 255) to 16 bit (max 65535)
+        # this is becuase the conversion between the two is a non integer (65535/255)
+        stack_size_bytes = aligned_stack_read.nbytes*4
+        stack_size_gb = stack_size_bytes/(1000**3)
+        n_chunks = math.ceil(stack_size_gb/3)
+
+        # print update on chunk size
+        if n_chunks == 1:
+            print(f"Aligned stack array requires {round(stack_size_gb,2)}GB. Dividing stacking process into {n_chunks} chunk, with a size of 3GB")
+        else:
+            print(f"Aligned stack array requires {round(stack_size_gb,2)}GB. Dividing stacking process into {n_chunks} chunks, with a size of 3GB each")
+
+        # determine chunk shape
+        chunk_width = int(self.frame_shape[0]/n_chunks)
+        chunk_start = 0
+        chunk_end = chunk_width
+
+        # loop through each chunk, read data, and stack
+        for i_chunk in range(1, n_chunks+1):
+
+            # read the chunk required from the memory map
+            chunk_array = aligned_stack_read[:,:,chunk_start:chunk_end,:].copy()
+
+            # convert to 16 bit
+            chunk_array = chunk_array.astype(np.uint16)
+            chunk_array = (chunk_array * 257)  # 65535 / 255 ≈ 257
+
+            # remove any layers that have only zeros in them (indicating an unsuccessful frame alignment)
+            chunk_array = chunk_array[~np.all(chunk_array==0,axis=(1, 2, 3))]
+
+            # apply stacking method (currently only "mean" implemented)
+            if self.inputs.stacking_method == 'mean':
+                stacked_array[:,chunk_start:chunk_end,:] = np.mean(chunk_array,axis=0)
+
+            # update the chunk parameters
+            chunk_start = chunk_start + chunk_width
+            chunk_end = chunk_end + chunk_width
+            if chunk_end > self.frame_shape[0]: chunk_end = self.frame_shape[0] + 1
+
+            # update image
+            image.set_data(stacked_array[0])
+            fig.canvas.draw()
+            fig.canvas.flush_events()
+
+        # keep figure open until it is manually closed
+        plt.ioff()
+        plt.show()
+
+        # extract mono & rgb data
+        stacked_array_mono = stacked_array[0].astype(np.uint16)
+        stacked_array_rgb = np.stack([stacked_array[1], stacked_array[2], stacked_array[3]], axis=-1).astype(np.uint16)
+        del stacked_array
+
+        # save as tiff to preserve 32 decimal precision
+        tifffile.imwrite(Path(self.output_directory) / "stacked_frame_mono.tiff", stacked_array_mono)
+        del stacked_array_mono
+        tifffile.imwrite(Path(self.output_directory) / "stacked_frame_rgb.tiff", stacked_array_rgb)
+        del stacked_array_rgb
+
+        # print update
+        print("... process complete!")
+        print(f"Stacked frames saved as stacked_frame_mono.tiff and stacked_frame_rgb.tiff")
 
         return self

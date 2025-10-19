@@ -180,11 +180,16 @@ class LightFrame:
 
         return tuned_star_detect_pixels
 
+    def get_frame_shape(self):
+        FrameReader(self).pre_process()
+
+        return self.mono_array.shape
+
 if __name__ == "__main__":
-    data_dir = Path(r"D:\_Local\OneDrive\Astronomy\StarTrack\dev\raw_data_iris_nebula")
+    data_dir = Path(r"D:\_Local\OneDrive\Astronomy\StarTrack\dev\raw_data_m82")
     verbosity = 1
-    #light = LightFrame(frame_directory=data_dir, frame_name="iris_nebula_frame_2.jpg", verbosity=verbosity)
+    # light = LightFrame(frame_directory=data_dir, frame_name="iris_nebula_frame_2.jpg", verbosity=verbosity)
     #t_tuned = light.tune_threshold()
-    light = LightFrame(frame_directory=data_dir, frame_name="iris_nebula_frame_2.jpg", verbosity=verbosity, star_detect_pixels=500.5, threshold=231)
-    light.process()
+    light = LightFrame(frame_directory=data_dir, frame_name="L_0171.jpg", verbosity=verbosity, star_detect_pixels=500.5, threshold=231)
+    light.process_tuning_star_detect(10)
     temp = 5

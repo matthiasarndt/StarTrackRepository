@@ -6,6 +6,7 @@ class Info:
     def print_logo(cls):
         if cls.print_info:
             logo = r'''  
+             
   \
    \
     \   ___  _                    
@@ -21,7 +22,7 @@ class Info:
                                       \
                                        \  
 
-Version: 0.2.3
+Version: 0.2.4
 Author: Matthias Arndt 				                        
             '''
             print(logo)
