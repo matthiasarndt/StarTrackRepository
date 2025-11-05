@@ -1,7 +1,6 @@
 
 # dependencies
 import numpy as np
-from StarTrack.light_frame.utils.main import Utils
 from PIL import Image
 
 class StarFilter:
@@ -19,7 +18,7 @@ class StarFilter:
         self.state.pixels_in_clusters = []
 
         # create empty array to store pixels identified as being in clusters
-        clustered_pixels_array = np.zeros(self.state.threshold_array.shape, dtype=np.uint8)
+        clustered_pixels_array = np.zeros(self.state.threshold_array.shape)
 
         # create star_pixels arrays
         star_pixels_yx = np.array(np.where(self.state.threshold_array == 255))

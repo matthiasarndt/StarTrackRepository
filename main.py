@@ -3,7 +3,7 @@
 import os
 import psutil
 from pathlib import Path
-from StarTrack import AstroPhoto, Info
+from StarTrack import FrameStack, Info
 from multiprocessing import freeze_support
 
 # verbosity = 0: minimal information, tracking overall status
@@ -29,6 +29,6 @@ if __name__ == "__main__":
     n_cores = max(1, n_physical_cores - 1)
 
     # create image object from astrophoto
-    image = AstroPhoto(data_directory=data_dir, n_aligning_stars=n_aligning_stars, verbosity=0, ref_frame_name="L_0099.NEF", threshold=t_value, max_cores=2)
-    # image.align()
-    image.stack()
+    m82_data = FrameStack(data_directory=data_dir, n_aligning_stars=n_aligning_stars, verbosity=0, ref_frame_name="L_0099.NEF", threshold=-1, max_cores=4)
+    m82_data.compute_stack()
+    m82_data.convert_to_stacked_image()

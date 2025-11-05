@@ -4,7 +4,7 @@ import math
 import numpy as np
 from PIL import Image, ImageFilter
 from matplotlib import pyplot as plt
-from StarTrack.light_frame.utils.main import Utils
+from StarTrack.light_frame.utils import Utils
 from sklearn.cluster import KMeans, MiniBatchKMeans, AgglomerativeClustering
 from sklearn.metrics import silhouette_score
 from sklearn.utils import resample
@@ -16,14 +16,10 @@ class Starfield:
 
     def count_stars(self, *args):
 
-        # create a list of possible cluster sizes, and empty output list
-        if self.inputs.verbosity > 0:
-            print("IN PROGRESS: Determining cluster number")
-
         # it can take incredibly long for this to run if the number of clusters is too high, so capped at 50
         if len(self.state.pixels_in_clusters) > 100:
-            if self.inputs.verbosity > 0:
-                print(f"IN PROGRESS: Trying up to 100 clusters!")
+            if self.inputs.verbosity > 1:
+                print(f"Determining star count, resolving pixel clusters with a maximum cluster count of 100")
             cluster_size_list = range(2, 100)
         else:
             if self.inputs.verbosity > 0: print(f"Assessing up to {len(self.state.pixels_in_clusters)} clusters!")
@@ -70,106 +66,110 @@ class Starfield:
 
     def catalogue_detected_stars(self, *args):
 
-        def catalogue_single_star(i_cluster):
+        def count_spots(search_array):
+            # a flood fill algorithm which will rapidly count stars, this is less accurate than the k-means clustering
+            # used for more complex tasks, but it is good as a quick check here
 
-            def count_spots(search_array):
-                # a flood fill algorithm which will rapidly count stars, this is less accurate than the k-means clustering
-                # used for more complex tasks, but it is good as a quick check here
+            # flood fill sub-function which is called by all pixels that are searched
+            def flood_fill(x_start, y_start):
 
-                # flood fill sub-function which is called by all pixels that are searched
-                def flood_fill(x_start, y_start):
+                # initialise a co-ordinate search list, with tuples of individual co-ordinates inside
+                search_coords = [(x_start, y_start)]
 
-                    # initialise a co-ordinate search list, with tuples of individual co-ordinates inside
-                    search_coords = [(x_start, y_start)]
+                # continue searching as long as there are pixels inside the search_coords list
+                while search_coords:
+                    # remove the x_start and y_start co-ordinates from the search_coords list, and extract them as x and y
+                    x_search, y_search = search_coords.pop()
 
-                    # continue searching as long as there are pixels inside the search_coords list
-                    while search_coords:
-                        # remove the x_start and y_start co-ordinates from the search_coords list, and extract them as x and y
-                        x_search, y_search = search_coords.pop()
+                    # make boundary check first
+                    is_within_bounds = (0 <= x_search < height) and (0 <= y_search < width)
 
-                        # make boundary check first
-                        is_within_bounds = (0 <= x_search < height) and (0 <= y_search < width)
+                    # if this check passes, check for bright pixels and if the pixel has previously been visited
+                    if is_within_bounds:
+                        is_bright_pixel = search_array[x_search, y_search] == 255
+                        is_not_visited = not visited_array[x_search, y_search]
 
-                        # if this check passes, check for bright pixels and if the pixel has previously been visited
-                        if is_within_bounds:
-                            is_bright_pixel = search_array[x_search, y_search] == 255
-                            is_not_visited = not visited_array[x_search, y_search]
+                        # if all conditions are satisfied, continue the search!
+                        if is_bright_pixel and is_not_visited:
+                            visited_array[x_search, y_search] = True
 
-                            # if all conditions are satisfied, continue the search!
-                            if is_bright_pixel and is_not_visited:
-                                visited_array[x_search, y_search] = True
+                            # four connected pixels are added
+                            search_coords.extend([
+                                (x_search - 1, y_search),
+                                (x_search + 1, y_search),
+                                (x_search, y_search - 1),
+                                (x_search, y_search + 1)])
 
-                                # four connected pixels are added
-                                search_coords.extend([
-                                    (x_search - 1, y_search),
-                                    (x_search + 1, y_search),
-                                    (x_search, y_search - 1),
-                                    (x_search, y_search + 1)])
+            # initialise
+            search_array = search_array.copy()
+            visited_array = np.zeros_like(search_array, dtype=bool)
+            height, width = search_array.shape
+            count = 0
 
-                # initialise
-                search_array = search_array.copy()
-                visited_array = np.zeros_like(search_array, dtype=bool)
-                height, width = search_array.shape
-                count = 0
+            # search all bright pixels inside the search array
+            for x_pixel in range(height):
+                for y_pixel in range(width):
 
-                # search all bright pixels inside the search array
-                for x_pixel in range(height):
-                    for y_pixel in range(width):
+                    # if the bright pixel has not been identified as being connected to another bright pixel, run the algorithm and increase count by 1
+                    if search_array[x_pixel, y_pixel] == 255 and not visited_array[x_pixel, y_pixel]:
+                        flood_fill(x_pixel, y_pixel)
+                        count += 1
 
-                        # if the bright pixel has not been identified as being connected to another bright pixel, run the algorithm and increase count by 1
-                        if search_array[x_pixel, y_pixel] == 255 and not visited_array[x_pixel, y_pixel]:
-                            flood_fill(x_pixel, y_pixel)
-                            count += 1
+            return count
 
-                return count
+        def bound_star(coords, perimeter_expansion):
 
-            def bound_star(coords, perimeter_expansion):
+            x_max = int(max(coords[:, 0]) + perimeter_expansion)
+            x_min = int(min(coords[:, 0]) - perimeter_expansion)
+            y_max = int(max(coords[:, 1]) + perimeter_expansion)
+            y_min = int(min(coords[:, 1]) - perimeter_expansion)
 
-                x_max = int(max(coords[:, 0]) + perimeter_expansion)
-                x_min = int(min(coords[:, 0]) - perimeter_expansion)
-                y_max = int(max(coords[:, 1]) + perimeter_expansion)
-                y_min = int(min(coords[:, 1]) - perimeter_expansion)
+            return x_max, x_min, y_max, y_min
 
-                return x_max, x_min, y_max, y_min
+        def isolate_largest_spot(input_array,detection_rad_guess):
 
-            def isolate_largest_spot(detection_rad_guess):
+            # r_guess: the initial guess for star detection radius
+            # math.pi*r_iteration**2: min_star_num is updated, with the assumption that ALL pixels equivalent to the area of the MUST be filled!
 
-                # r_guess: the initial guess for star detection radius
-                # math.pi*r_iteration**2: min_star_num is updated, with the assumption that ALL pixels equivalent to the area of the MUST be filled!
+            # define the properties of the solver:
+            r_iteration = detection_rad_guess
+            iteration_multiplier = 1.05  # the fidelity of each iteration
+            iterate = True
 
-                # define the properties of the solver:
-                r_iteration = detection_rad_guess
-                iteration_multiplier = 1.05 # the fidelity of each iteration
-                iterate = True
+            # perform the first calculation
+            filtered_space = Utils.local_density_filter(search_array=input_array,
+                                                        star_detect_radius=r_iteration,
+                                                        star_detect_pixels=(math.pi * r_iteration ** 2))
+            n_spots_iteration = count_spots(filtered_space)
 
-                # perform the first calculation
-                filtered_space = Utils.local_density_filter(search_array=bounded_star_threshold,star_detect_radius=r_iteration,star_detect_pixels=(math.pi * r_iteration ** 2))
+            # continue to calculate values until the residual drops to 0
+            while iterate:
+
+                # two exit conditions:
+                # 1) if n_spots_iteration is reduced to 0, it means that both stars were likely very similar in size, implying a large number of small stars
+                #    was falsely identified as a single large stars
+                # 2) if n_spots is reduced to 1, it means that a single large star has been successfully identified!
+                if n_spots_iteration <= 1:
+                    iterate = False
+
+                # increase the value of the star detection radius:
+                r_iteration = r_iteration * iteration_multiplier
+
+                # update values
+                filtered_space = Utils.local_density_filter(search_array=input_array,
+                                                            star_detect_radius=r_iteration,
+                                                            star_detect_pixels=(math.pi * r_iteration ** 2))
                 n_spots_iteration = count_spots(filtered_space)
 
-                # continue to calculate values until the residual drops to 0
-                while iterate:
+            return filtered_space
 
-                    # two exit conditions:
-                    # 1) if n_spots_iteration is reduced to 0, it means that both stars were likely very similar in size, implying a large number of small stars
-                    #    was falsely identified as a single large stars
-                    # 2) if n_spots is reduced to 1, it means that a single large star has been successfully identified!
-                    if n_spots_iteration <= 1:
-                        iterate = False
+        def assess_star_symmetry(search_array):
 
-                    # increase the value of the star detection radius:
-                    r_iteration = r_iteration * iteration_multiplier
+            symmetry_score = 1
 
-                    # update values
-                    filtered_space = Utils.local_density_filter(search_array=bounded_star_threshold,star_detect_radius=r_iteration,star_detect_pixels=(math.pi * r_iteration ** 2))
-                    n_spots_iteration = count_spots(filtered_space)
+            return symmetry_score
 
-                return filtered_space
-
-            def assess_star_symmetry(search_array):
-
-                symmetry_score = 1
-
-                return symmetry_score
+        def catalogue_single_star(i_cluster):
 
             # find the indices of all the labels
             i_label = np.where(labels == i_cluster)
@@ -180,8 +180,8 @@ class Starfield:
             # create the bounding box, finding the maximum and minimum x/y co-ordinates
             max_x, min_x, max_y, min_y = bound_star(coords=cluster_coords, perimeter_expansion=2)
 
-            # create an array with just the cropped star in it - this uses .copy(), but really it should be refactored to not need copy
-            bounded_star = self.state.mono_array[min_y:max_y, min_x:max_x].copy()
+            # create an array with just the cropped star in it - this uses .copy(), but really it should be refactored to not need copy - look into this!
+            bounded_star = self.state.mono_array[min_y:max_y, min_x:max_x]
 
             # provide a lower bound for star detection
             threshold = self.inputs.threshold - 20
@@ -223,7 +223,7 @@ class Starfield:
                     n_bright_pixels = np.array(np.where(bounded_star_threshold == 255)).shape[1]
                     mean_bright_spot_area = n_bright_pixels / n_spots
                     mean_bright_spot_radius = math.sqrt(mean_bright_spot_area/math.pi)
-                    bounded_star_filtered = isolate_largest_spot(detection_rad_guess=mean_bright_spot_radius)
+                    bounded_star_filtered = isolate_largest_spot(input_array=bounded_star_threshold,detection_rad_guess=mean_bright_spot_radius)
                     starfield_mask[min_y:max_y, min_x:max_x] = bounded_star_filtered
 
                     # plot filtered box for debugging

@@ -7,7 +7,7 @@ class StarAlignmentVectors:
         self.state = state
         self.inputs = self.state.inputs
 
-    def from_biggest_star(self):
+    def compute_from_biggest_star(self):
 
         # find the biggest star and run from it
         self.from_index_star(i_star = np.argmax(self.state.magnitude_list, axis=0))

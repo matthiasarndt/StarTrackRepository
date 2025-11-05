@@ -11,40 +11,49 @@ class FrameReader:
         self.state = state
         self.inputs = self.state.inputs
 
-    def processing(self, *args):
+    def read_rgb(self, *args):
 
-        # extract all data, mono, red, green, blue
-        self.state.mono_frame = self.state.rgb_frame.convert('L')
-        r_frame = self.state.rgb_frame.getchannel('R')
-        g_frame = self.state.rgb_frame.getchannel('G')
-        b_frame = self.state.rgb_frame.getchannel('B')
+        # print update
+        if self.inputs.verbosity > 0: print(f"Loading {self.inputs.frame_directory}\\{self.inputs.frame_name}")
 
-        # convert to numpy array for processing
-        self.state.mono_array = np.array(self.state.mono_frame)
-        self.state.r_array = np.array(r_frame)
-        self.state.g_array = np.array(g_frame)
-        self.state.b_array = np.array(b_frame)
+        # find image
+        read_path = Path(self.inputs.frame_directory) / self.inputs.frame_name
 
-        # threshold the image
-        self.state.threshold_array = (self.state.mono_array > self.inputs.threshold) * 255  # pixels above threshold become 255, others 0
-        threshold_frame = Image.fromarray(self.state.threshold_array.astype(np.uint8))
+        # decide on path and then import
+        if read_path.suffix.lower() == ".nef":
+            with rawpy.imread(str(read_path)) as raw:
+                rgb_array_raw = raw.postprocess(use_camera_wb=True, output_bps=8)
+            rgb_frame = Image.fromarray(rgb_array_raw)
+        elif read_path.suffix.lower() in [".jpg", ".jpeg", ".png"]:
+            rgb_frame = Image.open(read_path)
+        else:
+            # raise erroer
+            raise TypeError("Unsupported file type")
 
-        # blur the image
-        blur_frame = threshold_frame.filter(ImageFilter.GaussianBlur(radius=self.inputs.blur_radius))
-        blur_array = np.array(blur_frame)
+        return rgb_frame
 
-        # re-threshold the blurred image. make sure this is 8 bit to reduce memory load!
-        self.state.threshold_array = (blur_array > 100).astype(np.uint8) * 255
+    def pre_process(self,*args):
 
-        # calculate the pixels to be cropped
-        masked_array = np.zeros_like(self.state.threshold_array)
-        crop_x = (1 - self.inputs.crop_factor) * np.shape(self.state.threshold_array)[0]
+        # read data and extract mono:
+        rgb_frame = self.read_rgb()
+        mono_frame = rgb_frame.convert('L')
+        self.state.mono_array = np.array(mono_frame)
+
+        # threshold and blur the frame:
+        process_frame = mono_frame.point(lambda p: 255 if p > self.inputs.threshold else 0)
+        process_frame.filter(ImageFilter.GaussianBlur(radius=self.inputs.blur_radius))
+        process_frame.point(lambda p: 255 if p > 100 else 0)
+
+        # calculate the pixels to be cropped:
+        # cropping is done to remove distortions effects on the edge of a frame from impacting the alignment process!
+        masked_array = np.zeros_like(self.state.mono_array)
+        crop_x = (1 - self.inputs.crop_factor) * np.shape(self.state.mono_array)[0]
         crop_x = int(crop_x)
-        crop_y = (1 - self.inputs.crop_factor) * np.shape(self.state.threshold_array)[1]
+        crop_y = (1 - self.inputs.crop_factor) * np.shape(self.state.mono_array)[1]
         crop_y = int(crop_y)
 
-        # crop the image and mutate threshold array
-        masked_array[crop_x:-crop_x, crop_y:-crop_y] = self.state.threshold_array[crop_x:-crop_x, crop_y:-crop_y]
+        # crop the image and mutate threshold array:
+        masked_array[crop_x:-crop_x, crop_y:-crop_y] = np.array(process_frame)[crop_x:-crop_x, crop_y:-crop_y]
         self.state.threshold_array = masked_array
 
         # print completion confirmation
@@ -52,36 +61,10 @@ class FrameReader:
 
         # debugging information
         if self.inputs.verbosity > 1:
-            threshold_frame = Image.fromarray(self.state.threshold_array.astype(np.uint8))
-            threshold_frame.show()
-            blur_frame.show()
-            self.state.mono_frame.show()
-
-        # delete data from memory that is no longer needed!
+            process_frame.show()
+            mono_frame.show()
 
         return self
 
-    def pre_process(self, *args):
 
-        # print update
-        if self.inputs.verbosity > 0: print(f"Loading {self.inputs.frame_directory}\\{self.inputs.frame_name}")
-
-        # find image
-        read_path = Path(self.inputs.frame_directory)/self.inputs.frame_name
-
-        # decide on path and then import
-        if read_path.suffix.lower() == ".nef":
-            with rawpy.imread(str(read_path)) as raw:
-                rgb_array_raw = raw.postprocess(use_camera_wb=True, output_bps=8)
-            self.state.rgb_frame = Image.fromarray(rgb_array_raw)
-        elif read_path.suffix.lower() in [".jpg",".jpeg",".png"]:
-            self.state.rgb_frame = Image.open(read_path)
-        else :
-            # raise erroer
-            raise TypeError("Unsupported file type")
-
-        # once data is read, pre-process
-        self.processing(self)
-
-        return self
 

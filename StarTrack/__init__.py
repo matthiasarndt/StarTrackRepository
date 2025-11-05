@@ -1,4 +1,3 @@
-from .light_frame.main import LightFrame
-from .coupled_frames.main import CoupledFrames
-from .astro_photo.main import AstroPhoto
-from .common.main import Info
+from .light_frame.light_frame import LightFrame
+from .frame_stack.frame_stack import FrameStack
+from .common.info import Info
