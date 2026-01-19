@@ -314,7 +314,7 @@ class StackedImage:
 
         image_gamma_corrected = image.max() * (image/image.max())**gamma
 
-        return image_gamma_corrected44
+        return image_gamma_corrected
 
     @staticmethod
     def _downsample_with_binning(image: np.ndarray, downsample_factor: int) -> np.ndarray:
