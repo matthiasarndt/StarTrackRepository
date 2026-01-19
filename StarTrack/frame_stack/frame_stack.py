@@ -322,8 +322,8 @@ class FrameStack:
         with open(self.output_directory / "tuned_parameters.json", "w") as json_file: json.dump(tuned_parameters,json_file, indent=4)
 
         # save solving parameters, reference frame image, & print to terminal:
-        light_ref_tuned.mono_frame.save(Path(self.output_directory) / "reference_frame_mono.jpg")
-        light_ref_tuned.rgb_frame.save(Path(self.output_directory) / "reference_frame_rgb.jpg")
+        # light_ref_tuned.mono_frame.save(Path(self.output_directory) / "reference_frame_mono.jpg")
+        # light_ref_tuned.rgb_frame.save(Path(self.output_directory) / "reference_frame_rgb.jpg")
         print(f"... star detection pixels tuned to {round(self.ref_star_detect_pixels,2)} for reference frame")
         print(f"... star detection pixels tuned to {round(self.add_star_detect_pixels,2)} for additional frames")
 
