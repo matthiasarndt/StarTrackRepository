@@ -11,7 +11,7 @@ from StarTrack import LightFrame
 from StarTrack.light_frame.star_alignment_vectors import StarAlignmentVectors
 from StarTrack.light_frame.frame_reader import FrameReader
 
-class FrameAligner:
+class CoupledFrames:
     def __init__(self, ref_frame, align_frame):
         self.ref_frame = ref_frame
         self.addition_frame = align_frame
@@ -24,7 +24,7 @@ class FrameAligner:
         self.addition_aligned_array_g = None
         self.addition_aligned_array_b = None
 
-    def align(self):
+    def compute_alignment_and_transform(self):
 
         # run alignment algorithms
         self._compute_ref_frame_aligning_stars() 
@@ -32,6 +32,12 @@ class FrameAligner:
         self._align_and_transform_additional_frame()
 
     def _compute_ref_frame_aligning_stars(self):
+        """
+        steps:
+            *
+        returns:
+            *
+        """
 
         # calculate star alignment vectors from the biggest star:
         StarAlignmentVectors(self.ref_frame).compute_from_biggest_star()
@@ -52,13 +58,11 @@ class FrameAligner:
     def _compute_additional_frame_aligning_stars(self):
         """
         steps:
-        - rank all stars from largest to smallest, assuming the largest is most likely the primary reference star used as a reference point for alignment
-        - compute alignment vectors for each star to the primary star and compare them to the alignment vectors from the primary star.
-        -
-        identify alignment stars once a match is found within specified angular and radial tolerances.
-
+            * rank all stars from largest to smallest, assuming the largest is most likely the primary reference star used as a reference point for alignment
+            * compute alignment vectors for each star to the primary star and compare them to the alignment vectors from the primary star.
+            * identify alignment stars once a match is found within specified angular and radial tolerances.
         returns:
-        - co-ordinates of reference points for additional frame
+            * co-ordinates of reference points for additional frame
         """
 
         # rank stars from largest to smallest. the larger the star, the more likely it is to be the PRIMARY ALIGNMENT STAR:
@@ -86,7 +90,7 @@ class FrameAligner:
 
             # try to determine addition co-ordinates and angles based on the reference star guess above. If it doesn't work, it means the guess star is not the reference star:
             try:
-                vector_matcher = AlignmentVectorMatcher(self.ref_frame, self.addition_frame)
+                vector_matcher = AlignmentVector(self.ref_frame, self.addition_frame)
                 self.coords_addition, self.angles_addition = vector_matcher.check_if_primary_star_is_correct()
 
                 # debugging information:
@@ -136,7 +140,7 @@ class FrameAligner:
 
         return self
 
-class AlignmentVectorMatcher:
+class AlignmentVector:
     def __init__(self, frame_main, frame_addition, angle_tol=0.01, radius_scale=1000):
         self.frame_main = frame_main
         self.frame_addition = frame_addition
@@ -243,8 +247,8 @@ if __name__ == '__main__':
     print(f"Total memory: {mem_info.rss / (1024 ** 2):.2f} MB")
 
     # couple frames and find aligning stars for reference frame:
-    coupled_frames = FrameAligner(frame_ref, frame_add)
-    coupled_frames.align()
+    coupled_frames = CoupledFrames(frame_ref, frame_add)
+    coupled_frames.compute_alignment_and_transform()
 
     # profile:
     process = psutil.Process(os.getpid())

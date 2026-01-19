@@ -20,9 +20,9 @@ if __name__ == "__main__":
 
     # determine inputs
     run_dir = os.path.dirname(os.path.abspath(__file__))
-    data_dir = Path(run_dir) / "raw_data_m82_lotsofdata"
+    data_dir = Path(run_dir) / "raw_data_horsehead"
     n_aligning_stars = 5  # recommended to be 5, maximum value is 9
-    t_value = 230  # manually set this based on the brightness of the starfield, setting it to -1 will make StarTrack a
+    t_value = 230  # manually set this based on the brightness of the starfield, setting it to -1 will make StarTrack tune the value
 
     # determine how many cores to use, in the example below n-1 available physical cores are used.
     n_physical_cores = psutil.cpu_count(logical=False)

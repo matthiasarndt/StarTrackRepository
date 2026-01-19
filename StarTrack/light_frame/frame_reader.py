@@ -27,7 +27,7 @@ class FrameReader:
         elif read_path.suffix.lower() in [".jpg", ".jpeg", ".png"]:
             rgb_frame = Image.open(read_path)
         else:
-            # raise erroer
+            # raise error
             raise TypeError("Unsupported file type")
 
         return rgb_frame

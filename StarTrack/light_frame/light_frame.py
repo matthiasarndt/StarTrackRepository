@@ -1,7 +1,7 @@
 
 # dependencies
 from scipy.optimize import least_squares, fsolve, bisect
-from StarTrack.light_frame.star_field import Starfield
+from .star_field import Starfield
 from StarTrack.light_frame.star_alignment_vectors import StarAlignmentVectors
 from StarTrack.light_frame.star_filter import StarFilter
 from StarTrack.light_frame.frame_reader import FrameReader
@@ -62,17 +62,19 @@ class LightFrame:
         return tuned_star_detect_pixels
 
     def get_frame_shape(self):
-
+        """
+        returns: shape in pixels [x,y] of a frame
+        """
         FrameReader(self).pre_process()
 
         return self.mono_array.shape
 
     def tune_threshold(self):
         """
-        # tune to provide a good thresholding value:
-        # implementation of a line solver, reducing threshold from 254 at increments of 4
-        # stop when an acceptable spread of stars is found between min_star_radius 1000  & 1
-        # returns just this value
+        function: tunes to provide a good thresholding value:
+        * implementation of a line solver, reducing threshold from 254 at increments of 4
+        * stop when an acceptable spread of stars is found between min_star_radius 1000  & 1
+        returns: appropriate threshold
         """
 
         def fitness_function(x):
