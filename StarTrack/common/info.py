@@ -22,7 +22,7 @@ class Info:
                                       \
                                        \  
 
-Version: 0.3.1
+Version: 0.3.2
 Author: Matthias Arndt 				                        
             '''
             print(logo)

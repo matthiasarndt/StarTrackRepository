@@ -1,5 +1,5 @@
 
-# dependencies
+# Dependencies
 import math
 import numpy as np
 from PIL import Image, ImageFilter
@@ -64,7 +64,7 @@ class Starfield:
 
         return self
 
-    def catalogue_detected_stars(self, *args):
+    def register_stars(self, *args):
 
         def count_spots(search_array):
             # a flood fill algorithm which will rapidly count stars, this is less accurate than the k-means clustering

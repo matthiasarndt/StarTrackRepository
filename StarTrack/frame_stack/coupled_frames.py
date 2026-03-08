@@ -8,7 +8,7 @@ from pathlib import Path
 from matplotlib import pyplot as plt
 from skimage.transform import estimate_transform, warp
 from StarTrack import LightFrame
-from StarTrack.light_frame.star_alignment_vectors import StarAlignmentVectors
+from StarTrack.light_frame.star_alignment_vectors import AlignmentVectors
 from StarTrack.light_frame.frame_reader import FrameReader
 
 class CoupledFrames:
@@ -40,7 +40,7 @@ class CoupledFrames:
         """
 
         # calculate star alignment vectors from the biggest star:
-        StarAlignmentVectors(self.ref_frame).compute_from_biggest_star()
+        AlignmentVectors(self.ref_frame).compute_from_biggest_star()
         centroids = self.ref_frame.centroid_list
         i_ref = self.ref_frame.i_ref_star
 
@@ -81,7 +81,7 @@ class CoupledFrames:
                 print(self.addition_frame.centroid_list)
 
             # calculate star alignment vectors from the index star:
-            StarAlignmentVectors(self.addition_frame).from_index_star(i_star)
+            AlignmentVectors(self.addition_frame).from_index_star(i_star)
 
             # debugging information:
             if __name__ == '__main__':
@@ -141,6 +141,15 @@ class CoupledFrames:
         return self
 
 class AlignmentVector:
+    """Matches star patterns (asterisms) between two frames via geometric properties.
+
+    Attributes:
+        frame_main (LightFrame): The reference frame containing the target asterism.
+        frame_addition (LightFrame): The frame being evaluated for a match.
+        angle_tol (float): Angular tolerance in radians for vector matching.
+        radius_scale (int): Scaling factor to align radial distance and angular tolerances.
+    """
+
     def __init__(self, frame_main, frame_addition, angle_tol=0.01, radius_scale=1000):
         self.frame_main = frame_main
         self.frame_addition = frame_addition
@@ -149,26 +158,26 @@ class AlignmentVector:
 
     def check_if_primary_star_is_correct(self):
 
-        # calculate how many alignment stars are required and create empty output lists:
+        # Calculate how many alignment stars are required and create empty output lists
         n_alignments_stars = len(self.frame_main.centroid_list)
         add_align_coords_list = []
         add_align_angles_list = []
 
-        # filter star co-ordinates and store properties of identified aligning stars in the reference frame:
-        # run through stars up until n_alignment - 1, because the reference alignment star is already known, and the rest need to be processed
+        # Filter star co-ordinates and store properties of identified aligning stars in the reference frame:
+        # Run through stars up until n_alignment - 1, because the reference alignment star is already known, and the rest need to be processed
         for i_star in range(n_alignments_stars - 1):
             add_align_star_coord, add_align_star_angle = self._is_alignment_vector_in_tolerance(i_star)
             add_align_coords_list.append(add_align_star_coord)
             add_align_angles_list.append(add_align_star_angle)
 
-        # add reference star details:
+        # Add reference star details
         add_align_coords_list.append(self.frame_addition.centroid_list[self.frame_addition.i_ref_star])
         add_align_angles_list.append(int(0))
 
-        # convert add_align_angles_array to numpy array:
+        # Convert add_align_angles_array to numpy array
         add_align_angles_array = np.array(add_align_angles_list)
 
-        # sort both arrays so that they match, in the order of angle from reference star:
+        # Sort both arrays so that they match, in the order of angle from reference star
         sort_indices = np.argsort(add_align_angles_array)[::-1]
         sorted_add_align_angles_array = np.array(add_align_angles_list)[sort_indices]
         sorted_add_align_coords_array = np.array(add_align_coords_list)[sort_indices]
@@ -176,7 +185,8 @@ class AlignmentVector:
         return sorted_add_align_coords_array, sorted_add_align_angles_array
 
     def _is_alignment_vector_in_tolerance(self, i_primary_star_candidate):
-        # determine tolerance for determining the aligning stars:
+
+        # Determine tolerance for determining the aligning stars
         tol = self.angle_tol
         filter_angle = self.frame_main.ref_angles[i_primary_star_candidate]
         i_ref_angle_list = np.where(np.abs(self.frame_addition.ref_angles - filter_angle) < tol)[0]
@@ -189,14 +199,14 @@ class AlignmentVector:
                 print(f"Angle check completed:")
                 print(f"Successfully identified alignment stars, with reference angle index: {i_ref_angle}")
 
-        # multiple stars are within the search angle. to isolate the correct alignment star, a further search is done on radius:
-        # tolerance scaled to account for order of magnitude difference between radiance and pixel distance
+        # Multiple stars are within the search angle. to isolate the correct alignment star, a further search is done on radius:
+        # Tolerance scaled to account for order of magnitude difference between radiance and pixel distance
         else:
             filter_distance = self.frame_main.ref_vectors[i_primary_star_candidate]
             i_ref_distance_list = np.where(np.abs(self.frame_addition.ref_vectors - filter_distance) < self.radius_scale * tol)[0]
             i_ref_angle = np.intersect1d(i_ref_angle_list, i_ref_distance_list)[0]
 
-            # debugging information:
+            # Debugging information:
             if __name__ == '__main__':
                 print("Angle & distance check completed:")
                 print(f"Successfully identified alignment star, with reference angle index: {i_ref_angle}")
@@ -204,12 +214,12 @@ class AlignmentVector:
                 print(f"Target distance: {filter_distance}")
                 print(f"Reference vector distance: {self.frame_addition.ref_vectors}")
 
-        # co-ordinates of non-reference stars flagged by the indices above are extracted:
-        # the indices in the main array of star centroids is found here, based on the exact star co-ordinates provided above
+        # Co-ordinates of non-reference stars flagged by the indices above are extracted:
+        # The indices in the main array of star centroids is found here, based on the exact star co-ordinates provided above
         non_ref_stars = self.frame_addition.non_ref_stars[i_ref_angle, :]
         i_alignment_star = np.where(self.frame_addition.centroid_list == non_ref_stars)[0][0]
 
-        # extract the exact co-ordinate and angle of this alignment star
+        # Extract the exact co-ordinate and angle of this alignment star
         coord = self.frame_addition.centroid_list[i_alignment_star]
         angle = self.frame_addition.ref_angles[i_ref_angle]
 

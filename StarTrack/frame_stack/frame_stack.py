@@ -5,7 +5,6 @@ import math
 import gc
 import traceback
 from os import mkdir
-
 import numpy as np
 import json
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -17,6 +16,7 @@ from tifffile import tifffile
 from StarTrack import LightFrame
 from StarTrack.frame_stack.coupled_frames import CoupledFrames
 from StarTrack.light_frame.frame_reader import FrameReader
+from StarTrack.frame_stack.frame_tuner import FrameTuner
 
 # Define named tuples required for parallelisation
 frameTuningArgs = namedtuple("frameTuningArgs", ["frame", "n_desired_stars"])
@@ -67,7 +67,7 @@ class FrameStack:
         self.stacked_array = None
         self.stacked_frame_mono = None
         self.stacked_frame_rgb = None
-        self.chunk_load_size_GB: int = 3
+        self.chunk_load_size_GB: int = 1
 
         # Determine output directory:
         self.output_directory = Path(self.inputs.data_directory) / "outputs"
@@ -218,10 +218,11 @@ class FrameStack:
         plt.show()
 
         # Calculate the number of chunks required
-        stack_size_bytes = aligned_stack_read.nbytes * 2 # multiplied by 2 as 16 bit uses double the storage of 8 bit
-        stack_size_gb = stack_size_bytes / (1000 ** self.chunk_load_size_GB)
-        n_chunks = math.ceil(stack_size_gb / self.chunk_load_size_GB)
-        print(f"Aligned stack array requires {round(stack_size_gb, 2)}GB. Dividing stacking process into {n_chunks} {'chunk' if n_chunks == 1 else 'chunks'}, with a size of {self.chunk_load_size_GB}GB{' each' if n_chunks > 1 else ''}")
+        actual_bytes = aligned_stack_read.nbytes
+        stack_size_gib = actual_bytes / (1024 ** 3)
+        n_chunks = math.ceil(stack_size_gib / self.chunk_load_size_GB)
+        print(f"Aligned stack array requires {stack_size_gib:.2f} GiB.")
+        print(f"Dividing into {n_chunks} chunks of ~{self.chunk_load_size_GB} GiB each.")
 
         # Determine chunk shape
         chunk_width = int(self.frame_shape[0] / n_chunks)
@@ -292,11 +293,17 @@ class FrameStack:
 
         # Tune threshold with light_tuning instance of LightFrame. Delete once generated, to reduce memory usage
         if self.inputs.threshold == -1:
-            print(f"Threshold set to -1 -tuning threshold parameter...")
-            tuned_threshold = LightFrame(frame_directory=self.inputs.data_directory,
+
+            print(f"Threshold set to -1. Tuning threshold parameter...")
+
+            light_threshold_tune = LightFrame(frame_directory=self.inputs.data_directory,
                                       frame_name=self.frame_list[self.i_ref_frame],
-                                      verbosity=0).tune_threshold()
+                                      verbosity=0)
+
+            tuned_threshold = FrameTuner(light_frame=light_threshold_tune).tune_threshold()
+
             print(f"... process complete")
+
             self.inputs = replace(self.inputs, threshold=tuned_threshold)
 
         # Create reference light frame instance
@@ -410,8 +417,14 @@ def _list_data_in_directory(directory):
 
 def _worker_process_with_tuning(solver_initialisation_args):
 
+    #solve_frame = solver_initialisation_args.frame
+    #solve_frame.process_tuning_star_detect(n_desired_clusters=solver_initialisation_args.n_desired_stars)
+
     solve_frame = solver_initialisation_args.frame
-    solve_frame.process_tuning_star_detect(n_desired_clusters=solver_initialisation_args.n_desired_stars)
+
+    FrameTuner(solve_frame).tune_star_detect_pixels(n_desired_clusters=solver_initialisation_args.n_desired_stars)
+
+    solve_frame.register_stars_and_alignment_vectors()
 
     return solve_frame
 
