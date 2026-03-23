@@ -1,5 +1,4 @@
 
-# Dependencies:
 import cv2
 import numpy as np
 import pyvista as pv
@@ -11,9 +10,7 @@ from sklearn.cluster._hdbscan import hdbscan
 from sklearn.preprocessing import StandardScaler
 from tifffile import tifffile
 
-# TODO: Break down the StackedImage class into multiple smaller classes for clarity (future release)
-
-# TODO: 1) update remove_vignette as described (current release)
+# TODO: Boost vibrance of images, using the background mask to do so
 
 class PostProcessor:
     """
@@ -36,7 +33,7 @@ class PostProcessor:
         self.rgb_processing = self.rgb_raw.copy().astype(np.float64)
         self.background_mask = None
 
-        # Initialise processing metadata.
+        # Initialise processing metadata
         self.processing_details = {
             "dynamic_range_boosted": 0,
             "background_neutralised": 0,
@@ -44,13 +41,81 @@ class PostProcessor:
             "vignette_corrected": 0,
         }
 
-    def correct_white_balance(self):
+    def align_channel_histogram(self, green_weight=0.99):
+        """Aligns the cumulative distribution of pixel intensity across RGB channels.
+
+        The two darker channels are shifted to match the  statistical distribution
+        of the brightest channel (the reference).
+
+        For the green channel specifically, a weighting factor is applied to blend the
+        original data with the matched distribution, to avoid a strong green signal,
+        which is typically induced by signal noise from the sensor.
+
+        Args:
+            green_weight (float, optional): The blending factor for the green channel.
+                A value of 1.0 fully replaces the channel with matched data, while
+                0.0 keeps the original. Defaults to 0.99.
+
+        Returns:
+            self: The instance with updated 'rgb_processing' (aligned channel histogram distributions).
+
+        Raises:
+            ValueError: If green_weight is outside the range [0.01, 1.0].
         """
-        Normalises image white balance by anchoring RGB channels to the background Blue reference.
+
+        # gren_weight must be in an appropriate range!
+        if not (0.0 <= green_weight <= 1.0):
+            error_msg = f"Invalid green_weight: {green_weight}. Must be between 0.0 and 1.0."
+            raise ValueError(error_msg)
+
+        print("Aligning CDF of RGB channels...")
+
+        # Identify target channel (the brightest mean!)
+        # The remaining two channels will be mapped to this channel
+        rgb_img = self.rgb_processing.astype(np.float64)
+
+        if self.inputs.verbosity > 0:
+            print("Displaying histogram for unmatched channels")
+            self._generate_histogram()
+
+        rgb_means = np.nanmean(np.where(rgb_img > 0, rgb_img, np.nan), axis=(0, 1))
+        idx_brightest_mean = np.argmax(rgb_means)
+        reference_channel = rgb_img[:, :, idx_brightest_mean]
+        channel_indices = [0, 1, 2]
+        channel_indices.pop(idx_brightest_mean)
+
+        for idx_channel in channel_indices:
+
+            # Calculate the fully matched channel
+            matched = self._match_channels(rgb_img[:, :, idx_channel], reference_channel)
+
+            # Apply the weight only if the current channel is g (index 1)
+            if idx_channel == 1:
+                rgb_img[:, :, 1] = (matched * green_weight) + (rgb_img[:, :, 1] * (1 - green_weight))
+            else:
+                rgb_img[:, :, idx_channel] = matched
+
+        self.rgb_processing = np.clip(rgb_img, 0, 255).astype(np.float64)
+
+        if self.inputs.verbosity > 0:
+            print("Displaying histogram for matched channels")
+            self._generate_histogram()
+
+        channel_str = ['red', 'green', 'blue']
+        print(f"... CDF alignment complete. All channels now share the {channel_str[idx_brightest_mean]} distribution")
+
+        return self
+
+    def neutralise_background_colour(self):
+        """
+        Normalises image white balance by anchoring RGB channels to the brightest background
+        channel intensity.
+
+        TODO: Assess if it would be best to always anchor this to the blue channel.
 
         Calculates per-channel scaling factors based on the background's
         distance from pure white (255). It then applies these factors to the inverted
-        color space to align the Red and Green background intensities with the Blue channel.
+        color space to align the dimmer background intensities with the brightest channel.
 
         Returns:
             self: The instance with updated 'rgb_processing' and corrected white balance.
@@ -59,7 +124,7 @@ class PostProcessor:
         if self.background_mask is None:
             self._extract_background_with_segmentation()
 
-        print("Correcting white balance...")
+        print("Neutralising background colour...")
 
         # Note that background mask is a 3D array
         rgb_background = (self.rgb_processing * self.background_mask)
@@ -74,7 +139,7 @@ class PostProcessor:
         self.rgb_processing = 255.0 - k_colour_correct * (255.0 - self.rgb_processing)
         self.rgb_processing = np.clip(self.rgb_processing, 0, 255).astype(np.float64)
 
-        print("... process completed")
+        print("... background colour neutralising")
 
         if self.inputs.verbosity > 0:
             plt.figure(figsize=(16, 12))
@@ -83,19 +148,104 @@ class PostProcessor:
 
         return self
 
+    def _generate_histogram(self):
+        """Generates an RGB histogram and normalised CDF plot for diagnostics.
+
+        Visualises channel distribution on a semi-log scale to identify clipping,
+        offsets, or exposure imbalances in the current image state.
+
+        Returns:
+            self: The current instance of the class.
+        """
+
+        print("Generating RGB Histogram Diagnostic...")
+
+        channel_labels = ['red', 'green', 'blue']
+        line_colours = ['r','g','b']
+
+        plt.figure(figsize=(10, 6))
+        plt.title("Channel Histogram")
+        plt.xlabel("Pixel Intensity [0-255]")
+        plt.ylabel("Frequency [log]")
+
+        for i in range(len(channel_labels)):
+
+            # Calculate histogram & plot on semi-log axes
+            hist, bins = np.histogram(self.rgb_processing[:, :, i].ravel(), bins=256, range=(0, 256))
+            plt.semilogy(bins[:-1], hist, color=line_colours[i],
+                         alpha=0.8,
+                         label=f'{channel_labels[i].capitalize()} Hist'
+                         )
+
+            # Calculate cumulative distribution function & normalise by peak of histogram for visualisation purposes
+            cumulative_dist = hist.cumsum()
+            cumulative_dist_normalised = cumulative_dist * (hist.max() / cumulative_dist.max())
+            plt.plot(bins[:-1], cumulative_dist_normalised, color=line_colours[i], linestyle='--', alpha=0.3)
+
+        plt.legend(loc='upper right')
+        plt.grid(True, which="both", ls="-", alpha=0.2)
+        plt.xlim([0, 256])
+
+        print("Close the plot window to continue...")
+
+        plt.show()
+
+        return self
+
+    @staticmethod
+    def _match_channels(input_channel, target_channel):
+        """Matches the histogram of an input channel to a target reference channel.
+
+        This is a static method, not relying on any data from an instance.
+
+        This method performs the following steps:
+            1. Computes the Cumulative Distribution Function (CDF) for both channels.
+            2. Normalises the CDFs to a [0, 1] range.
+            3. Creates a Look-Up Table (LUT) by interpolating the input CDF values
+               against the target's intensity distribution.
+            4. Re-maps the original input pixels to their new intensities using the LUT.
+
+        Args:
+            input_channel (np.ndarray): The source channel to transform.
+            target_channel (np.ndarray): The reference  channel providing the target distribution.
+
+        Returns:
+            np.ndarray: The input channel reshaped and re-mapped to match the
+                target histogram.
+        """
+
+        # Calculate the CDF of the reference channel
+        unique_input_pixel_intensities, input_counts = np.unique(input_channel.ravel(), return_counts=True)
+        unique_target_pixel_intensities, target_counts = np.unique(target_channel.ravel(), return_counts=True)
+
+        # Normalise the CDFs
+        input_cdf_normalised = np.cumsum(input_counts).astype(np.float64) / input_channel.size
+        target_cdf_normalised = np.cumsum(target_counts).astype(np.float64) / target_channel.size
+
+        # Create a look-up table to map the input distribution to the target distribution
+        input_to_target_map_lut = np.interp(input_cdf_normalised,
+                                            target_cdf_normalised, unique_target_pixel_intensities)
+
+        # Map the input channel to the mapping look up table
+        # The query of points is input_channel.ravel() (flattened to a 1D array)
+        # The reference values are the pixels in unique_input_pixel_intensities, which are mapped to the target outputs via the input_to_target_map_lut
+        matched_channel = np.interp(input_channel.ravel(), unique_input_pixel_intensities, input_to_target_map_lut).reshape(input_channel.shape)
+
+        return matched_channel
+
     def remove_vignette(self, strength=1.0, degree=2):
-        """Corrects radial illumination falloff using a masked polynomial fit.
+        """Corrects radial illumination gradients using a masked polynomial fit.
 
         Models the background curvature as a function of squared radius (r^2)
         using Ordinary Least Squares. The resulting profile is used to
         flatten the intensity across all image channels.
 
         Args:
-            strength (float): Intensity of the correction; 1.0 is full application.
-            degree (int): Radial polynomial degree (even integers, e.g., 2, 4).
+            strength (float): Intensity of the correction; with 1.0 being the strongest (default value).
+            degree (int): Radial polynomial degree (even integers, e.g., 2, 4). Default is 2.
 
         Returns:
-            self: The class instance with the corrected image in `self.rgb_processing`.
+            self: instance with updated 'rgb_processing'
         """
 
         if self.background_mask is None:
@@ -111,7 +261,12 @@ class PostProcessor:
         x_centre = (width - 1) / 2.0
 
         y_grid, x_grid = np.mgrid[0:height, 0:width]
-        r2_grid = (x_grid - x_centre) ** 2 + (y_grid - y_centre) ** 2
+
+        # r2_grid = (x_grid - x_centre) ** 2 + (y_grid - y_centre) ** 2
+
+        x_norm = (x_grid - x_centre) / x_centre
+        y_norm = (y_grid - y_centre) / y_centre
+        r2_grid = x_norm ** 2 + y_norm ** 2
 
         # The background mask is in 3d, so it needs to be flattened to 2d. A check is added for robustness
         if self.background_mask.ndim == 3:
@@ -122,10 +277,10 @@ class PostProcessor:
         # Re-order mask to be a 1d array
         mask_1d = mask_2d.flatten() > 0
 
-        # Successively add additional terms based on power of radial fit model
-        powers = range(0, (degree // 2) + 1)
-        features = []
-        for p in powers:
+        # Generate features matrix, with columns representing each radial power
+        radial_powers = range(1, (degree // 2) + 1)
+        features = [np.ones_like(x_norm), x_norm, y_norm]
+        for p in radial_powers:
             features.append(r2_grid ** p)
 
         # The design matrix is fed into the least squares solver
@@ -138,7 +293,7 @@ class PostProcessor:
             single_channel_1d = rgb[:, :, i].reshape(-1)
             single_channel_1d_masked = single_channel_1d[mask_1d]
 
-            # Solve least squares to find coefficients mapping each co-ordinate from background curvature to rgb data.
+            # Solve least-squares to find coefficients mapping each co-ordinate from background curvature to rgb data.
             # These fitting coefficients match the form of the equation z = a + b*r^2 + c*r^4 ...
             # They have the following relationship:
             # design_matrix_masked * fitting_coefficients = single_channel_1d_masked
@@ -361,9 +516,10 @@ class PostProcessor:
         return image_downsampled
 
 if __name__ == "__main__":
-    test_image = PostProcessor(data_directory=Path(r"C:\Users\matth\OneDrive\Astronomy\StarTrack\dev\raw_data_horsehead"), verbosity=0)
-    test_image.correct_white_balance()
+    test_image = PostProcessor(data_directory=Path(r"D:\_Local\OneDrive\Astronomy\StarTrack\dev\raw_data_horsehead"), verbosity=0)
     test_image.remove_vignette()
+    test_image.align_channel_histogram()
+    test_image.neutralise_background_colour()
     test_image.boost_dynamic_range(gamma=7)
     test_image.save_image_as_tiff()
 
