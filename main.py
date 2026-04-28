@@ -1,13 +1,12 @@
-
 import os
 import psutil
 from pathlib import Path
 from StarTrack import FrameStack, Info
 from multiprocessing import freeze_support
 
-# verbosity = 0: minimal information, tracking overall status
-# verbosity = 1: figures of identified stars
-# verbosity = 2: debugging information [not all information is printed, some debugging is found by individually running relevant scripts]
+# Verbosity = 0: minimal information, tracking overall status
+# Verbosity = 1: figures of identified stars
+# Verbosity = 2: debugging information [not all information is printed, some debugging is found by individually running relevant scripts]
 
 if __name__ == "__main__":
 
@@ -28,6 +27,6 @@ if __name__ == "__main__":
     n_cores = max(1, n_physical_cores - 1)
 
     # Create image object from astrophoto
-    astro_photo = FrameStack(data_directory=data_dir, n_aligning_stars=n_aligning_stars, verbosity=1, ref_frame_name="20210212210734 [ISO400] [60.2s] [f4.7] [288mm].NEF", threshold=t_value, max_cores=4)
-    # astro_photo.compute_stack()
-    astro_photo.convert_to_stacked_image()
+    astro_photo = FrameStack(data_directory=data_dir, n_aligning_stars=n_aligning_stars, verbosity=0, ref_frame_name="20210212210734 [ISO400] [60.2s] [f4.7] [288mm].NEF", max_cores=4)
+    astro_photo.compute_stack()
+    # astro_photo.convert_to_stacked_image()

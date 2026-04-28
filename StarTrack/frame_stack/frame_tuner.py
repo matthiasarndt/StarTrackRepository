@@ -1,4 +1,3 @@
-
 from dataclasses import replace
 from pathlib import Path
 from scipy.optimize import least_squares, fsolve, bisect
@@ -6,7 +5,6 @@ from StarTrack.light_frame.frame_reader import FrameReader
 from StarTrack.light_frame.light_frame import LightFrame
 from StarTrack.light_frame.star_field import Starfield
 from StarTrack.light_frame.star_filter import StarFilter
-
 
 class FrameTuner:
     """Handles optimisation of image processing parameters for astronomical star detection.

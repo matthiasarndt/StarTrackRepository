@@ -1,5 +1,3 @@
-
-# dependencies:
 import psutil
 import os
 import tracemalloc
@@ -8,10 +6,10 @@ from pathlib import Path
 from matplotlib import pyplot as plt
 from skimage.transform import estimate_transform, warp
 from StarTrack import LightFrame
-from StarTrack.light_frame.star_alignment_vectors import AlignmentVectors
+from StarTrack.light_frame.star_alignment_vectors import StarAlignmentVectors
 from StarTrack.light_frame.frame_reader import FrameReader
 
-class CoupledFrames:
+class FrameAligner:
     def __init__(self, ref_frame, align_frame):
         self.ref_frame = ref_frame
         self.addition_frame = align_frame
@@ -40,7 +38,7 @@ class CoupledFrames:
         """
 
         # calculate star alignment vectors from the biggest star:
-        AlignmentVectors(self.ref_frame).compute_from_biggest_star()
+        StarAlignmentVectors(self.ref_frame).compute_from_biggest_star()
         centroids = self.ref_frame.centroid_list
         i_ref = self.ref_frame.i_ref_star
 
@@ -81,7 +79,7 @@ class CoupledFrames:
                 print(self.addition_frame.centroid_list)
 
             # calculate star alignment vectors from the index star:
-            AlignmentVectors(self.addition_frame).from_index_star(i_star)
+            StarAlignmentVectors(self.addition_frame).from_index_star(i_star)
 
             # debugging information:
             if __name__ == '__main__':
@@ -90,7 +88,7 @@ class CoupledFrames:
 
             # try to determine addition co-ordinates and angles based on the reference star guess above. If it doesn't work, it means the guess star is not the reference star:
             try:
-                vector_matcher = AlignmentVector(self.ref_frame, self.addition_frame)
+                vector_matcher = StarPatternMatcher(self.ref_frame, self.addition_frame)
                 self.coords_addition, self.angles_addition = vector_matcher.check_if_primary_star_is_correct()
 
                 # debugging information:
@@ -140,7 +138,7 @@ class CoupledFrames:
 
         return self
 
-class AlignmentVector:
+class StarPatternMatcher:
     """Matches star patterns (asterisms) between two frames via geometric properties.
 
     Attributes:
@@ -257,7 +255,7 @@ if __name__ == '__main__':
     print(f"Total memory: {mem_info.rss / (1024 ** 2):.2f} MB")
 
     # couple frames and find aligning stars for reference frame:
-    coupled_frames = CoupledFrames(frame_ref, frame_add)
+    coupled_frames = FrameAligner(frame_ref, frame_add)
     coupled_frames.compute_alignment_and_transform()
 
     # profile:

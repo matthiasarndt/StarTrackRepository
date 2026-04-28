@@ -1,12 +1,10 @@
-
-# Dependencies
 import os
 import math
 import gc
 import traceback
-from os import mkdir
 import numpy as np
 import json
+from os import mkdir
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from collections import namedtuple
@@ -14,9 +12,11 @@ from pathlib import Path
 from matplotlib import pyplot as plt
 from tifffile import tifffile
 from StarTrack import LightFrame
-from StarTrack.frame_stack.coupled_frames import CoupledFrames
-from StarTrack.light_frame.frame_reader import FrameReader
+from StarTrack.frame_stack.frame_aligner import FrameAligner
 from StarTrack.frame_stack.frame_tuner import FrameTuner
+from StarTrack.light_frame.frame_reader import FrameReader
+from StarTrack.frame_stack.stacking_algorithm import StackingAlgorithm
+from StarTrack.common.config import Config
 
 # Define named tuples required for parallelisation
 frameTuningArgs = namedtuple("frameTuningArgs", ["frame", "n_desired_stars"])
@@ -53,8 +53,8 @@ class FrameStack:
         ref_frame_name: str = None
         verbosity: int = 0
         n_aligning_stars: int = 5
-        threshold: int = 240
-        stacking_method: str = 'mean' # TODO: Implement the following - 'sigma_clipping', 'mean_pixel_rejection', 'median', 'SNR weighted mean average'
+        threshold_override: int = None
+        stacking_algorithm: str = 'mean' # TODO: Implement the following - 'sigma_clipping', 'mean_pixel_rejection', 'median', 'SNR weighted mean average'
         max_cores: int = 5
 
     def __init__(self, **kwargs):
@@ -63,13 +63,22 @@ class FrameStack:
         self.frame_list = None
         self.ref_star_detect_pixels = None
         self.add_star_detect_pixels = None
+        self.add_tuning_multiplier = 6
         self.aligned_stack_read = None
         self.stacked_array = None
         self.stacked_frame_mono = None
         self.stacked_frame_rgb = None
+        self.stack_shape = None
+        self.frame_shape = None
         self.chunk_load_size_GB: int = 1
 
-        # Determine output directory:
+        # Override default threshold value if required
+        if self.inputs.threshold_override is not None:
+            self.threshold = int(self.inputs.threshold_override)
+        else:
+            self.threshold: int = 240
+
+        # Determine output directory
         self.output_directory = Path(self.inputs.data_directory) / "outputs"
         if not self.inputs.stack_directory.is_dir():
             mkdir(self.inputs.stack_directory)
@@ -78,16 +87,11 @@ class FrameStack:
         self.frame_list = _list_data_in_directory(self.inputs.data_directory)
         print(f"Indexing image data directory: {self.inputs.data_directory}")
 
-        # Determine index of reference frame:
+        # Determine index of reference frame
         if self.inputs.ref_frame_name is None:
             self.i_ref_frame = 0
         else:
             self.i_ref_frame = self.frame_list.index(self.inputs.ref_frame_name)
-
-        # Load reference frame, find data dimensions, delete reference frame from memory. NOTE: this is a temporary solution, will be refactored for efficiency
-        light_temp = LightFrame(frame_directory=self.inputs.data_directory, frame_name=self.frame_list[self.i_ref_frame], verbosity=0)
-        self.frame_shape = light_temp.get_frame_shape()
-        del light_temp
 
     def compute_stack(self):
         """
@@ -113,17 +117,11 @@ class FrameStack:
         self.output_directory.mkdir(parents=True, exist_ok=True)
         _delete_previous_output(directory=self.output_directory, output_list=["reference_frame_mono.jpg", "reference_frame_rgb.jpg", "stacked_frames_mono.jpg", "stacked_frames_rgb.jpg"])
 
-        # Create memory mapped arrays
-        aligned_stack_write = np.memmap(filename=self.inputs.stack_directory / "stack_aligned_array.dat",
-                                             dtype=np.uint8,
-                                             mode='w+',
-                                             shape=(len(self.frame_list), 4, self.frame_shape[0], self.frame_shape[1]))
-
         # By default, tuning is set to 1:
         flag_tuning = True
 
         # Check if tuned parameters already exist - check if the user doesn't want to tune, and set to 0 if true
-        if (Path(self.output_directory) / "tuned_parameters.json").is_file():
+        if (Path(self.output_directory) / "project_config.json").is_file():
             while True:
                 response = input("Previously tuned parameters found for this dataset! Retune? (Y/N)?: ").strip().lower()
                 if response in ("y", "n"):
@@ -133,10 +131,21 @@ class FrameStack:
                     break
                 print("Please enter 'Y' or 'N'.")
 
+        # Generate reference frame
         if flag_tuning:
             light_ref = self._tune_parameters()
         else:
             light_ref = self._load_parameters()
+
+        # Get frame shape to initialise memory mapped array
+        self.frame_shape = light_ref.get_frame_shape()
+        self.stack_shape = (len(self.frame_list), 4, self.frame_shape[0], self.frame_shape[1])
+
+        # Initialise memory mapped arrays
+        aligned_stack_write = np.memmap(filename=self.inputs.stack_directory / "stack_aligned_array.dat",
+                                             dtype=np.uint8,
+                                             mode='w+',
+                                             shape=self.stack_shape)
 
         # Store light_ref mono & r/g/b data
         ref_rgb_frame = FrameReader.read_rgb(light_ref)
@@ -148,14 +157,13 @@ class FrameStack:
                                                     ])
 
         aligned_stack_write.flush()
-
         gc.collect()
 
         # Remove the reference image from the image_list
         align_frame_list = self.frame_list[:self.i_ref_frame] + self.frame_list[self.i_ref_frame + 1:]
 
         # Define inputs for the remainder of frames to be processed, with a named tuple as input structure and list comprehension
-        args_tuple = [additionalFrameAlignmentArgs(i_layer, align_frame_list[i_layer], self.inputs.data_directory, self.add_star_detect_pixels, light_ref, self.inputs.threshold)
+        args_tuple = [additionalFrameAlignmentArgs(i_layer, align_frame_list[i_layer], self.inputs.data_directory, self.add_star_detect_pixels, light_ref, self.threshold)
                       for i_layer in range(0, len(align_frame_list))]
 
         with ProcessPoolExecutor(max_workers=self.inputs.max_cores) as executor:
@@ -172,8 +180,12 @@ class FrameStack:
                 aligned_stack_write[result["i_layer"] + 1, :, :, :] = np.stack([result["mono"], result["r"], result["g"], result["b"]])
                 aligned_stack_write.flush()
 
+        # Free up memory
         del aligned_stack_write
         gc.collect()
+
+        # Write parameters to config
+        Config(Path(self.output_directory)).write_from_object(self)
 
     def convert_to_stacked_image(self):
         """
@@ -205,7 +217,7 @@ class FrameStack:
         aligned_stack_read = np.memmap(filename=self.inputs.stack_directory / "stack_aligned_array.dat",
                                        dtype=np.uint8, # TODO: Check this!
                                        mode='r',
-                                       shape=(len(self.frame_list), 4, self.frame_shape[0], self.frame_shape[1]))
+                                       shape=self.stack_shape)
 
         # Pre define stacked array - 16 bit
         stacked_array = np.empty((4, self.frame_shape[0], self.frame_shape[1]), dtype=np.float32)
@@ -239,8 +251,12 @@ class FrameStack:
             chunk_array = chunk_array[~np.all(chunk_array == 0, axis=(1, 2, 3))]
 
             # Apply stacking method (currently only "mean" implemented)
-            if self.inputs.stacking_method == 'mean':
-                stacked_array[:, chunk_start:chunk_end, :] = np.mean(chunk_array, axis=0)
+
+            # The code below is included as a placeholder for future integration with the StackingAlgorithm class.
+            # if self.inputs.stacking_algorithm == 'mean':
+                # stacked_array[:, chunk_start:chunk_end, :] = np.mean(chunk_array, axis=0)
+
+            stacked_array[:, chunk_start:chunk_end, :] = StackingAlgorithm(chunk_array=chunk_array,method="mean").run()
 
             # Update the chunk parameters
             chunk_start = chunk_start + chunk_width
@@ -289,10 +305,10 @@ class FrameStack:
             LightFrame: The fully tuned reference frame object.
         """
 
-        _delete_previous_output(directory=self.output_directory, output_list=["tuned_parameters.json"])
+        _delete_previous_output(directory=self.output_directory, output_list=["project_parameters.json"])
 
         # Tune threshold with light_tuning instance of LightFrame. Delete once generated, to reduce memory usage
-        if self.inputs.threshold == -1:
+        if self.threshold == -1:
 
             print(f"Threshold set to -1. Tuning threshold parameter...")
 
@@ -304,19 +320,18 @@ class FrameStack:
 
             print(f"... process complete")
 
-            self.inputs = replace(self.inputs, threshold=tuned_threshold)
+            self.threshold = tuned_threshold
 
         # Create reference light frame instance
         print(f"Tuning star detect pixels parameters...")
         light_tuning = LightFrame(frame_directory=self.inputs.data_directory,
                                   frame_name=self.frame_list[self.i_ref_frame],
                                   verbosity=self.inputs.verbosity,
-                                  threshold=self.inputs.threshold)
+                                  threshold=self.threshold)
 
         # Tune star_detect_parameter
-        add_tuning_multiplier = 6
         ref_frame_args = frameTuningArgs(light_tuning, self.inputs.n_aligning_stars)
-        add_frame_args = frameTuningArgs(light_tuning, self.inputs.n_aligning_stars * add_tuning_multiplier)
+        add_frame_args = frameTuningArgs(light_tuning, self.inputs.n_aligning_stars * self.add_tuning_multiplier)
         with ProcessPoolExecutor(max_workers=2) as tuning_executor:
             light_ref_tuned, light_ref_tuned_for_additional = tuning_executor.map(_worker_process_with_tuning, [ref_frame_args, add_frame_args])
 
@@ -324,12 +339,8 @@ class FrameStack:
         self.ref_star_detect_pixels = light_ref_tuned.inputs.star_detect_pixels
         self.add_star_detect_pixels = light_ref_tuned_for_additional.inputs.star_detect_pixels
 
-        # Create json file to store tuning parameters
-        tuned_parameters = {"reference_frame": self.frame_list[self.i_ref_frame],
-                            "threshold": self.inputs.threshold,
-                            "ref_star_detect_pixels": self.ref_star_detect_pixels,
-                            "add_star_detect_pixels": self.add_star_detect_pixels}
-        with open(self.output_directory / "tuned_parameters.json", "w") as json_file: json.dump(tuned_parameters,json_file, indent=4)
+        # Write to config
+        Config(Path(self.output_directory)).write_from_object(self)
 
         # Save solving parameters, reference frame image, & print to terminal
         # light_ref_tuned.mono_frame.save(Path(self.output_directory) / "reference_frame_mono.jpg")
@@ -346,35 +357,21 @@ class FrameStack:
         Operations:
         - Reads parameters from disk and updates instance settings
         - Returns a processed reference LightFrame using the loaded data
-
-        Arguments:
-            self: The class instance.
-
-        Returns:
-            LightFrame: The processed reference frame object.
-
-        Raises:
-            FileNotFoundError: If the settings file is not found.
         """
 
-        # Find json file and raise error if not found
-        json_path = Path(self.output_directory) / "tuned_parameters.json"
-        if not json_path.is_file():
-            raise FileNotFoundError(f"Tuned parameters not found at: {json_path}")
-        with open(json_path, "r") as f:
-            data = json.load(f)
+        project_config = Config(Path(self.output_directory))
+        project_dict = project_config.read_parameters()
 
         # Assign parameters from JSON to self
-        self.frame_list[self.i_ref_frame] = data["reference_frame"]
-        self.inputs.threshold = data["threshold"]
-        self.ref_star_detect_pixels = data["ref_star_detect_pixels"]
-        self.add_star_detect_pixels = data["add_star_detect_pixels"]
+        self.threshold = project_dict["threshold"]
+        self.ref_star_detect_pixels = project_dict["ref_star_detect_pixels"]
+        self.add_star_detect_pixels = project_dict["add_star_detect_pixels"]
 
         # Create light_ref with pre tuned variables and process
         light_ref_pre_tuned = LightFrame(frame_directory=self.inputs.data_directory,
                                             frame_name=self.frame_list[self.i_ref_frame],
                                             verbosity=self.inputs.verbosity,
-                                            threshold=self.inputs.threshold,
+                                            threshold=self.threshold,
                                             star_detect_pixels=self.ref_star_detect_pixels).process()
 
         return light_ref_pre_tuned
@@ -453,7 +450,7 @@ def _worker_align_additional_frame_wrapper(arg_tuple):
 def _align_single_frame(i_layer, light_ref, light_addition):
 
     # Create object which couples the reference and additional light
-    lights_paired = CoupledFrames(light_ref, light_addition)
+    lights_paired = FrameAligner(light_ref, light_addition)
 
     # Align the additional frame with the reference frame
     lights_paired.compute_alignment_and_transform()

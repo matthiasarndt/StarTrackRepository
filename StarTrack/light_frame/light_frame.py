@@ -5,7 +5,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 import tracemalloc
-from StarTrack.light_frame.star_alignment_vectors import AlignmentVectors
+from StarTrack.light_frame.star_alignment_vectors import StarAlignmentVectors
 from StarTrack.light_frame.star_filter import StarFilter
 from StarTrack.light_frame.frame_reader import FrameReader
 from StarTrack.light_frame.star_field import Starfield
@@ -75,14 +75,14 @@ class LightFrame:
         StarFilter(self).local_density()
         Starfield(self).count_stars()
         Starfield(self).register_stars()
-        AlignmentVectors(self).compute_from_biggest_star()
+        StarAlignmentVectors(self).compute_from_biggest_star()
 
         return self
 
     def register_stars_and_alignment_vectors(self):
 
         Starfield(self).register_stars()
-        AlignmentVectors(self).compute_from_biggest_star()
+        StarAlignmentVectors(self).compute_from_biggest_star()
 
         return self
 
@@ -107,7 +107,7 @@ if __name__ == "__main__":
     data_dir = Path(r"D:\_Local\OneDrive\Astronomy\StarTrack\dev\raw_data_m82")
     verbosity = 1
     light = LightFrame(frame_directory=data_dir, frame_name="L_0173.jpg", verbosity=verbosity, star_detect_pixels=500.5, threshold=231)
-    light.tune_threshold()
+    # light.tune_threshold() - Tuning functionality no longer included in light_frame object, so ths command is now defunct!
 
     # Memory profiling
     snapshot = tracemalloc.take_snapshot()
